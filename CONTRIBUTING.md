@@ -43,8 +43,8 @@ cargo run --bin client
 From `docs/`:
 
 ```bash
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 ## Protocol compatibility rules
@@ -90,7 +90,7 @@ If you change this, update:
 3. Ensure builds pass:
    - `cargo build --workspace`
    - `cargo test --workspace`
-   - `npm run build` (if docs changed)
+   - `bun run build` (if docs changed)
 4. Open a PR with:
    - What changed
    - Why it changed
