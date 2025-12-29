@@ -7,10 +7,7 @@ export default function Sudeikis() {
       <main className="mx-auto w-full max-w-4xl px-6 py-14 font-sans">
         <header className="mb-10">
           <div className="flex flex-row justify-between">
-            <h1 className="text-3xl font-semibold tracking-tight">
-              Sudeikis
-              <span className="text-slate-300">/demo</span>{" "}
-            </h1>
+            <h1 className="text-3xl font-semibold tracking-tight">Sudeikis</h1>
             <a
               className="self-end mr-6 underline underline-offset-4 text-sm text-black/80"
               href="/"
