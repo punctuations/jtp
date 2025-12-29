@@ -7,6 +7,7 @@ use rustls::pki_types::{ CertificateDer, PrivateKeyDer };
 use std::sync::Arc;
 use std::io::BufReader;
 use std::path::Path;
+use std::path::PathBuf;
 
 async fn load_or_generate_tls_material() -> tokio::io::Result<
     (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)
@@ -52,9 +53,55 @@ async fn load_or_generate_tls_material() -> tokio::io::Result<
     Ok((certs, key))
 }
 
+#[derive(Debug, Clone)]
+struct ServerArgs {
+    bind: String,
+    images_dir: PathBuf,
+    only_name_contains: Option<String>,
+}
+
+fn parse_args() -> ServerArgs {
+    let mut bind = String::from("0.0.0.0:8443");
+    let mut images_dir = PathBuf::from("images");
+    let mut only_name_contains: Option<String> = None;
+
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--bind" => {
+                if let Some(v) = args.next() {
+                    bind = v;
+                }
+            }
+            "--images" | "--images-dir" => {
+                if let Some(v) = args.next() {
+                    images_dir = PathBuf::from(v);
+                }
+            }
+            "--only" | "--name-contains" => {
+                if let Some(v) = args.next() {
+                    only_name_contains = Some(v);
+                }
+            }
+            "-h" | "--help" => {
+                eprintln!(
+                    "Usage: server [--bind ADDR] [--images DIR] [--only SUBSTRING]\n\n  --bind      Bind address (default: 0.0.0.0:8443)\n  --images    Images directory to scan (default: images)\n  --only      Only serve files whose basename contains SUBSTRING (case-insensitive)"
+                );
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+
+    ServerArgs { bind, images_dir, only_name_contains }
+}
+
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
-    let catalog = Arc::new(ImageCatalog::new());
+    let args = parse_args();
+    let catalog = Arc::new(
+        ImageCatalog::from_dir(&args.images_dir, args.only_name_contains.as_deref())
+    );
     println!("Loaded {} images", catalog.images.len());
 
     // TLS is used purely to encrypt the JTP protocol bytes.
@@ -69,8 +116,8 @@ async fn main() -> tokio::io::Result<()> {
     config.alpn_protocols = vec![b"jtp/1".to_vec()];
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
-    let listener = TcpListener::bind("0.0.0.0:9999").await?;
-    println!("JTP secure server listening on 9999");
+    let listener = TcpListener::bind(&args.bind).await?;
+    println!("JTP secure server listening on {}", args.bind);
 
     loop {
         let (socket, _addr) = listener.accept().await?;

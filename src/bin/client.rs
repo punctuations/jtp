@@ -19,13 +19,64 @@ struct ListedImage {
     size: u32,
 }
 
-async fn tls_connect() -> Result<
-    tokio_rustls::client::TlsStream<TcpStream>,
-    Box<dyn std::error::Error>
-> {
-    let tcp = TcpStream::connect("127.0.0.1:9999").await?;
+#[derive(Debug, Clone)]
+struct ClientArgs {
+    addr: String,
+    server_name: String,
+    cert_path: PathBuf,
+    receive_dir: PathBuf,
+}
 
-    let cert_bytes = tokio::fs::read("cert.pem").await?;
+fn parse_args() -> ClientArgs {
+    let mut addr = String::from("127.0.0.1:8443");
+    let mut server_name = String::from("localhost");
+    let mut cert_path = PathBuf::from("cert.pem");
+    let mut receive_dir = PathBuf::from("output");
+
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--addr" => {
+                if let Some(v) = args.next() {
+                    addr = v;
+                }
+            }
+            "--server-name" => {
+                if let Some(v) = args.next() {
+                    server_name = v;
+                }
+            }
+            "--cert" => {
+                if let Some(v) = args.next() {
+                    cert_path = PathBuf::from(v);
+                }
+            }
+            "--out" | "--output" => {
+                if let Some(v) = args.next() {
+                    receive_dir = PathBuf::from(v);
+                }
+            }
+            "-h" | "--help" => {
+                eprintln!(
+                    "Usage: client [--addr HOST:PORT] [--server-name NAME] [--cert PATH] [--out DIR]\n\n  --addr         Server address (default: 127.0.0.1:8443)\n  --server-name  TLS SNI name (default: localhost)\n  --cert         Path to server certificate to trust (default: cert.pem)\n  --out          Output directory (default: output)"
+                );
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+
+    ClientArgs { addr, server_name, cert_path, receive_dir }
+}
+
+async fn tls_connect(
+    addr: &str,
+    server_name: &str,
+    cert_path: &Path
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, Box<dyn std::error::Error>> {
+    let tcp = TcpStream::connect(addr).await?;
+
+    let cert_bytes = tokio::fs::read(cert_path).await?;
     let certs: Vec<CertificateDer<'static>> = {
         let mut reader = BufReader::new(std::io::Cursor::new(cert_bytes));
         rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?
@@ -41,17 +92,18 @@ async fn tls_connect() -> Result<
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(client_config));
 
-    let server_name = ServerName::try_from("localhost")?;
+    let server_name = ServerName::try_from(server_name.to_owned())?;
     Ok(connector.connect(server_name, tcp).await?)
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let receive_dir = PathBuf::from("output");
+    let args = parse_args();
+    let receive_dir = args.receive_dir;
     std::fs::create_dir_all(&receive_dir)?;
 
     // 1) Discover available images.
-    let mut list_stream = tls_connect().await?;
+    let mut list_stream = tls_connect(&args.addr, &args.server_name, &args.cert_path).await?;
     list_stream.write_u8(REQUEST_LIST).await?;
 
     let mut list_header = [0u8; 4];
@@ -99,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 2) Request selected images by ID.
-    let mut stream = tls_connect().await?;
+    let mut stream = tls_connect(&args.addr, &args.server_name, &args.cert_path).await?;
     stream.write_u8(REQUEST_GET_BY_ID).await?;
     if ids.len() > (u8::MAX as usize) {
         return Err(format!("too many images to request in one batch: {}", ids.len()).into());

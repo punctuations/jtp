@@ -41,6 +41,9 @@ export default function JTP() {
             <a className="underline underline-offset-4" href="#examples">
               Examples
             </a>
+            <a className="underline underline-offset-4" href="/sudeikis">
+              Sudeikis
+            </a>
           </nav>
         </header>
 
@@ -57,7 +60,7 @@ export default function JTP() {
 
           <div className="mt-6">
             <Mermaid
-              caption="Connection + request/response sequence"
+              caption="Request and response flow"
               chart={`sequenceDiagram
   autonumber
   participant C as Client
@@ -85,7 +88,7 @@ export default function JTP() {
             <li>Transport is TCP, optionally wrapped in TLS.</li>
             <li>
               The reference server listens on{" "}
-              <span className="font-mono">127.0.0.1:9999</span>.
+              <span className="font-mono">127.0.0.1:8443</span>.
             </li>
           </ul>
         </section>

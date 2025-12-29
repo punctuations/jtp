@@ -34,7 +34,7 @@ cargo build --release
 cargo run --bin server
 ```
 
-- Listens on `127.0.0.1:9999` by default.
+- Listens on `127.0.0.1:8443` by default.
 - Serves images based on `ImageID` requests.
 
 #### **Client**
@@ -67,7 +67,7 @@ request/response protocol.
 ### **1. Connection**
 
 - TCP (optionally TLS-encrypted).
-- Server listens on a configurable port (default `127.0.0.1:9999`).
+- Server listens on a configurable port (default `127.0.0.1:8443`).
 - Client initiates connection and negotiates TLS if enabled.
 
 ### **2. ImageID Encoding**

@@ -27,34 +27,56 @@ pub struct ImageCatalog {
 
 impl ImageCatalog {
     pub fn new() -> Self {
+        Self::from_dir("images", None)
+    }
+
+    pub fn from_dir(images_dir: impl Into<PathBuf>, name_contains: Option<&str>) -> Self {
+        let images_dir = images_dir.into();
         let mut catalog = HashMap::new();
+        let name_contains = name_contains.map(|s| s.to_ascii_lowercase());
 
-        // Scan images folder
-        let paths = fs::read_dir("images").unwrap();
-        for entry in paths {
-            let path = entry.unwrap().path();
-            if path.is_file() {
-                let bytes = fs::read(&path).unwrap();
-                let hash = Sha256::digest(&bytes);
-                let mut id = [0u8; 16];
-                id.copy_from_slice(&hash[..16]);
+        let Ok(paths) = fs::read_dir(&images_dir) else {
+            return Self { images: catalog };
+        };
 
-                // Determine file type byte
-                let ext = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                let file_type = match ext.to_lowercase().as_str() {
-                    "png" => 0,
-                    "jpg" | "jpeg" => 1,
-                    "webp" => 2,
-                    "bmp" => 3,
-                    "gif" => 4,
-                    _ => 255,
-                };
-
-                catalog.insert(id, ImageMetadata { id, file_type, file_name: path.clone() });
+        for entry in paths.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
             }
+
+            if let Some(filter) = &name_contains {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !name.contains(filter) {
+                    continue;
+                }
+            }
+
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            let hash = Sha256::digest(&bytes);
+            let mut id = [0u8; 16];
+            id.copy_from_slice(&hash[..16]);
+
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let file_type = match ext.to_lowercase().as_str() {
+                "png" => 0,
+                "jpg" | "jpeg" => 1,
+                "webp" => 2,
+                "bmp" => 3,
+                "gif" => 4,
+                _ => 255,
+            };
+
+            catalog.insert(id, ImageMetadata { id, file_type, file_name: path.clone() });
         }
 
         Self { images: catalog }
