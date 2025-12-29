@@ -5,9 +5,9 @@ export default function JTP() {
     <div className="min-h-screen bg-white text-black">
       <main className="mx-auto w-full max-w-4xl px-6 py-14 font-sans">
         <header className="mb-10">
-          <div className="flex flex-row justify-between max-w-2xl">
+          <div className="flex flex-row justify-between">
             <h1 className="text-3xl font-semibold tracking-tight">
-              JTP
+              Jason Transfer Protocol &mdash; JTP
               <span className="text-slate-300">/1.0</span>{" "}
             </h1>
             <p className="self-end mr-6">
@@ -17,7 +17,7 @@ export default function JTP() {
             </p>
           </div>
 
-          <p className="mt-3 max-w-2xl text-base leading-7 text-black/70">
+          <p className="mt-3 text-base leading-7 text-black/70">
             Jason Transfer Protocol ("JTP") is a compact request/response
             protocol for listing and transferring images over TCP (optionally
             TLS), keyed by SHA-256-derived IDs.
