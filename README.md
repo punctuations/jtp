@@ -3,8 +3,6 @@
 **JTP** is a high-performance, secure image transfer protocol designed for fast
 delivery of Jason images (or any images) over TCP with optional TLS encryption.
 
----
-
 ## **Getting Started**
 
 ### **Prerequisites**
@@ -12,8 +10,6 @@ delivery of Jason images (or any images) over TCP with optional TLS encryption.
 - Rust 1.72+
 - Cargo
 - On Windows, `CMake` may be required to build TLS dependencies.
-
----
 
 ### **Building**
 
@@ -28,8 +24,6 @@ cargo build --release
 - **Client binary:** `target/release/client.exe` (Windows) or `client`
   (Linux/macOS)
 
----
-
 ### **Usage**
 
 #### **Server**
@@ -42,8 +36,6 @@ cargo run --bin server
 
 - Listens on `127.0.0.1:9999` by default.
 - Serves images based on `ImageID` requests.
-
----
 
 #### **Client**
 
@@ -67,8 +59,6 @@ jason2.png
 output_<first_8_bytes_of_id>.jpg
 ```
 
----
-
 ## **Protocol Outline**
 
 **Purpose:** Secure, fast transfer of images using a simple, hash-based
@@ -79,8 +69,6 @@ request/response protocol.
 - TCP (optionally TLS-encrypted).
 - Server listens on a configurable port (default `127.0.0.1:9999`).
 - Client initiates connection and negotiates TLS if enabled.
-
----
 
 ### **2. ImageID Encoding**
 
@@ -102,8 +90,6 @@ image_id = hash[0..15]              // first 16 bytes
 - Client uses `ImageID` to request images.
 - Server uses `ImageID` to identify and respond with the correct image.
 
----
-
 ### **3. Client Request Packet**
 
 JTP supports two request types.
@@ -121,8 +107,6 @@ JTP supports two request types.
 | `ReqType` | 1            | `0` = GET_BY_ID                    |
 | `Count`   | 1            | Number of images requested (`N`)   |
 | `ImageID` | 16 × N       | Hash-based IDs of requested images |
-
----
 
 ### **4. Server Response Packets**
 
@@ -155,8 +139,6 @@ Each entry:
 | `Filename` | `NameLen`    | UTF-8 encoded descriptive filename                           |
 | `Length`   | 4            | Big-endian length of image data                              |
 | `Data`     | Variable     | Raw image bytes                                              |
-
----
 
 ## **Example Packets (Byte-by-Byte)**
 
@@ -233,23 +215,17 @@ DE AD BE EF
 | 32..35 | `00 00 00 04`                   | `Length = 4` (u32)                     |
 | 36..39 | `DE AD BE EF`                   | `Data` bytes                           |
 
----
-
 ### **5. Security**
 
 - TLS ensures confidentiality and integrity.
 - `ImageID` prevents collisions and simplifies deduplication.
 - Optional future enhancements: authentication, metadata, and compression.
 
----
-
 ### **6. Extensibility**
 
 - Add new file types in `FileType` enum.
 - Include metadata (dimensions, compression) in the header.
 - Support streaming of very large images in chunks.
-
----
 
 ### **Flow Diagram**
 
@@ -265,8 +241,6 @@ Client                          Server
   |         (repeated per image)        |
 ```
 
----
-
 ### **License**
 
-MIT License — free to use and modify for personal or commercial projects.
+GNU v3.0
