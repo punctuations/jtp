@@ -14,7 +14,7 @@ delivery of Jason images (or any images) over TCP with optional TLS encryption.
 ### **Building**
 
 ```bash
-git clone https://github.com/yourusername/jtp.git
+git clone https://github.com/punctuations/jtp.git
 cd jtp
 cargo build --release
 ```
