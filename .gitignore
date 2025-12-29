@@ -3,3 +3,44 @@ output
 Cargo.lock
 
 *.pem
+
+# --- Next.js docs site (docs/) ---
+
+# dependencies
+**/node_modules/
+docs/.pnp
+docs/.pnp.*
+docs/.yarn/*
+!docs/.yarn/patches
+!docs/.yarn/plugins
+!docs/.yarn/releases
+!docs/.yarn/versions
+
+# testing
+docs/coverage/
+
+# next.js
+docs/.next/
+docs/out/
+
+# production
+docs/build/
+
+# misc
+.DS_Store
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+
+# vercel
+docs/.vercel
+
+# typescript
+*.tsbuildinfo
+docs/next-env.d.ts
