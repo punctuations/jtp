@@ -5,24 +5,6 @@ delivery of Jason images (or any images) over TCP with optional TLS encryption.
 
 ---
 
-## **Features**
-
-- **Secure:** TLS support via `rustls` and `tokio-rustls`.
-- **Async & Fast:** Built on `tokio` for high-performance streaming.
-- **Hash-based Image IDs:** Images are identified via SHA256 hashes truncated to
-  16 bytes.
-- **Flexible Image Types:** Supports `.jpg`, `.png`, `.webp`, `.bmp`, `.gif`,
-  and arbitrary binary files.
-- **Cross-platform:** Works on Windows, Linux, and macOS.
-- **Descriptive Filenames:** Server includes filenames in responses for easy
-  client saving.
-- **Discovery via LIST:** Client can discover available images without knowing
-  `ImageID` ahead of time.
-- **Clean shutdown:** Ensures file handles and network streams are flushed and
-  closed properly.
-
----
-
 ## **Getting Started**
 
 ### **Prerequisites**
