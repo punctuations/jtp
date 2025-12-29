@@ -76,7 +76,7 @@ export default function Mermaid({ chart, className, caption }: MermaidProps) {
   return (
     <figure className={className}>
       <div
-        className="overflow-x-auto rounded-xl border border-black/10 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm [&>svg]:h-auto [&>svg]:w-full"
+        className="flex justify-center overflow-x-auto rounded-xl border border-black/10 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm [&>svg]:h-auto [&>svg]:w-full"
         // Mermaid returns SVG markup; we control the source string.
         dangerouslySetInnerHTML={{ __html: svg }}
       />
