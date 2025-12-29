@@ -1,6 +1,39 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
 export default function Sudeikis() {
-  const sudeikisImageIdHex = "342054a62e20cf1269029cf02779bd77";
-  const sudeikisImageIdShort = sudeikisImageIdHex.slice(0, 16);
+  const [imageIdHex, setImageIdHex] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/sudeikis", { cache: "no-store" });
+        const header = res.headers.get("X-JTP-ImageID");
+        if (!cancelled) {
+          if (!header) {
+            setError("Missing X-JTP-ImageID header from /api/sudeikis");
+          } else {
+            setImageIdHex(header);
+          }
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(String(e));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const imageIdShort = useMemo(() => {
+    if (!imageIdHex) return null;
+    return imageIdHex.slice(0, 8);
+  }, [imageIdHex]);
 
   return (
     <div className="min-h-screen bg-white text-black">
@@ -33,6 +66,14 @@ export default function Sudeikis() {
             <a className="underline underline-offset-4" href="#commands">
               Commands
             </a>
+            <a
+              className="underline underline-offset-4"
+              href="https://github.com/punctuations/jtp"
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub
+            </a>
           </nav>
         </header>
 
@@ -55,13 +96,22 @@ export default function Sudeikis() {
               File: <span className="font-mono">images/sudeikis.jpg</span>
             </li>
             <li>
-              ImageID (16 bytes / 32 hex):{" "}
-              <span className="font-mono">{sudeikisImageIdHex}</span>
+              ImageID (8 bytes / 16 hex):{" "}
+              <span className="font-mono">
+                {imageIdHex ?? (error ? "(error)" : "(loading...)")}
+              </span>
             </li>
             <li>
-              Short (first 8 bytes):{" "}
-              <span className="font-mono">{sudeikisImageIdShort}</span>
+              Short (first 4 bytes):{" "}
+              <span className="font-mono">
+                {imageIdShort ?? (error ? "(error)" : "(loading...)")}
+              </span>
             </li>
+            {error ? (
+              <li>
+                Error: <span className="font-mono">{error}</span>
+              </li>
+            ) : null}
           </ul>
         </section>
 

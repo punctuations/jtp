@@ -1,6 +1,6 @@
-use sha2::{ Digest, Sha256 };
+use xxhash_rust::xxh64::xxh64;
 
-const IMAGE_ID_LEN: usize = 16;
+const IMAGE_ID_LEN: usize = 8;
 const IMAGE_ID_HEX_LEN: usize = IMAGE_ID_LEN * 2;
 
 #[no_mangle]
@@ -33,10 +33,11 @@ pub extern "C" fn image_id_hex(input_ptr: *const u8, input_len: usize) -> *mut u
     }
 
     let input = unsafe { std::slice::from_raw_parts(input_ptr, input_len) };
-    let hash = Sha256::digest(input);
+    let id = xxh64(input, 0);
+    let id_bytes = id.to_be_bytes();
 
     let mut out = [0u8; IMAGE_ID_HEX_LEN];
-    hex_encode_16(&hash[..IMAGE_ID_LEN], &mut out);
+    hex_encode_8(&id_bytes, &mut out);
 
     let mut vec = Vec::with_capacity(IMAGE_ID_HEX_LEN);
     vec.extend_from_slice(&out);
@@ -49,11 +50,11 @@ pub extern "C" fn image_id_hex(input_ptr: *const u8, input_len: usize) -> *mut u
     ptr
 }
 
-fn hex_encode_16(bytes16: &[u8], out32: &mut [u8; IMAGE_ID_HEX_LEN]) {
+fn hex_encode_8(bytes: &[u8], out: &mut [u8; IMAGE_ID_HEX_LEN]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
 
-    for (i, b) in bytes16.iter().enumerate() {
-        out32[i * 2] = HEX[(b >> 4) as usize];
-        out32[i * 2 + 1] = HEX[(b & 0x0f) as usize];
+    for (i, b) in bytes.iter().enumerate() {
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0f) as usize];
     }
 }

@@ -7,4 +7,4 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-sha2 = "0.10.9"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
