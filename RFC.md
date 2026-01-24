@@ -2,7 +2,7 @@
 
 **Status:** Draft
 
-**Last updated:** 2025-12-29
+**Last updated:** 2026-01-24
 
 ## 1. Abstract
 
@@ -38,17 +38,27 @@ A typical flow:
    entries.
 3. Client requests images either:
    - explicitly by ID (`GET_BY_ID`), or
-   - via delta sync (`BATCH`), providing IDs it already has.
+   - via delta sync (`BATCH`), providing IDs it already has, or
+   - via combined operation (`LIST_AND_GET`) for single round-trip.
 4. Server returns image packets containing `(flags, length, ImageID, data)`.
 
-### 3.1 One request per connection
+### 3.1 Connection Reuse (Keep-Alive)
 
-JTP deployments commonly use **one request per connection**: the client opens a
+JTP supports connection reuse through a **keep-alive** mechanism. When enabled,
+multiple requests can be sent over a single connection, avoiding repeated TLS
+handshakes.
+
+- If the `keep-alive` flag is set in a request, the server **SHOULD** keep the
+  connection open after sending the response and await the next request.
+- If the flag is not set, the server **SHOULD** close the connection after the
+  response.
+- Servers **MAY** implement idle timeouts to close stale keep-alive connections.
+- Clients **SHOULD NOT** assume keep-alive is supported; they **MUST** handle
+  server-initiated connection closes gracefully.
+
+Legacy deployments may use **one request per connection**: the client opens a
 connection, sends exactly one request, receives the response bytes, then the
 connection is closed.
-
-Clients **SHOULD NOT** pipeline multiple JTP requests over a single connection
-unless the server explicitly supports it.
 
 ## 4. Transport
 
@@ -109,8 +119,8 @@ is the hex encoding of the 8 big-endian bytes.
 JTP uses a one-byte `Flags` field with the following bit assignments:
 
 - Bits `0..2` (mask `0b0000_0111`): **file type**
-- Bit `3`: **compressed** (1 = compressed)
-- Bit `4`: **encrypted** (1 = encrypted)
+- Bit `3`: **compressed** (1 = Zstd compressed)
+- Bit `4`: **encrypted** (1 = encrypted, reserved for future use)
 - Bits `5..7`: reserved (MUST be 0 unless specified by a future extension)
 
 ### 7.1 File type codes
@@ -130,73 +140,105 @@ If the file type is not known, senders **SHOULD** use `7`.
 
 ### 7.2 Compression and encryption bits
 
-This RFC reserves the compression and encryption bits for future extensions.
+- **Compression**: When bit 3 is set, the image data is Zstd compressed.
+  Receivers MUST decompress before use.
+- **Encryption**: Bit 4 is reserved for future encryption support.
 
-- If `compressed` or `encrypted` is set and the receiver does not support the
-  corresponding feature, the receiver **SHOULD** fail the request/connection
-  rather than misinterpreting bytes.
+If `compressed` or `encrypted` is set and the receiver does not support the
+corresponding feature, the receiver **SHOULD** fail the request/connection
+rather than misinterpreting bytes.
 
 ## 8. Requests
 
-The first byte of every request is `ReqType (u8)`.
+The first byte of every request is `ReqType (u8)`. For requests that support
+connection reuse, the second byte is `RequestFlags (u8)`.
+
+### 8.0 Request Flags
+
+Requests that support keep-alive include a `RequestFlags` byte:
+
+| Bit | Name       | Description                              |
+| --- | ---------- | ---------------------------------------- |
+| 0   | keep-alive | 1 = keep connection open after response  |
+| 1-7 | reserved   | MUST be 0 unless specified by extension  |
+
+Servers **MUST** reject requests with reserved bits set by closing the
+connection or sending an ERROR response.
 
 ### 8.1 `LIST` request (`ReqType = 1`)
 
-Client → Server:
+Client -> Server:
 
-| Field   | Type | Size | Description |
-| ------- | ---- | ---- | ----------- |
-| ReqType | u8   | 1    | `1`         |
+| Field        | Type | Size | Description                 |
+| ------------ | ---- | ---- | --------------------------- |
+| ReqType      | u8   | 1    | `1`                         |
+| RequestFlags | u8   | 1    | Flags (bit 0 = keep-alive)  |
 
 No additional payload.
 
 ### 8.2 `GET_BY_ID` request (`ReqType = 0`)
 
-Client → Server:
+Client -> Server:
 
-| Field   | Type | Size | Description                |
-| ------- | ---- | ---- | -------------------------- |
-| ReqType | u8   | 1    | `0`                        |
-| Count   | u8   | 1    | Number of IDs (`N`)        |
-| ImageID | u64  | 8×N  | Requested IDs (big-endian) |
+| Field        | Type | Size | Description                |
+| ------------ | ---- | ---- | -------------------------- |
+| ReqType      | u8   | 1    | `0`                        |
+| RequestFlags | u8   | 1    | Flags (bit 0 = keep-alive) |
+| Count        | u8   | 1    | Number of IDs (`N`)        |
+| ImageID      | u64  | 8xN  | Requested IDs (big-endian) |
 
 Semantics:
 
 - `N` may be zero.
+- `N` **MUST NOT** exceed 255.
 - Servers **MAY** ignore unknown IDs.
 
 **Response framing note:** The `GET_BY_ID` response has no explicit top-level
-count. Clients **SHOULD** treat the response as a stream of image packets until
-the connection closes.
+count. Clients **SHOULD** read exactly `N` image packets. If keep-alive is set,
+the connection remains open for subsequent requests.
 
 ### 8.3 `BATCH` request (delta sync) (`ReqType = 2`)
 
-`BATCH` is used to download “missing” images.
+`BATCH` is used to download "missing" images.
 
-Client → Server:
+Client -> Server:
 
-| Field     | Type        | Size | Description                  |
-| --------- | ----------- | ---- | ---------------------------- |
-| ReqType   | u8          | 1    | `2`                          |
-| HaveCount | varint(u32) | 1–5  | Number of IDs provided (`N`) |
-| ImageID   | u64         | 8×N  | IDs the client already has   |
+| Field        | Type        | Size | Description                  |
+| ------------ | ----------- | ---- | ---------------------------- |
+| ReqType      | u8          | 1    | `2`                          |
+| RequestFlags | u8          | 1    | Flags (bit 0 = keep-alive)   |
+| HaveCount    | varint(u32) | 1-5  | Number of IDs provided (`N`) |
+| ImageID      | u64         | 8xN  | IDs the client already has   |
 
 Semantics:
 
 - Server compares provided IDs against its catalog.
 - Server responds with only the images the client does not have.
 
+### 8.4 `LIST_AND_GET` request (`ReqType = 5`)
+
+Combined catalog listing and image transfer in a single round-trip.
+
+Client -> Server:
+
+| Field        | Type | Size | Description                |
+| ------------ | ---- | ---- | -------------------------- |
+| ReqType      | u8   | 1    | `5`                        |
+| RequestFlags | u8   | 1    | Flags (bit 0 = keep-alive) |
+
+No additional payload. Server responds with all available images.
+
 ## 9. Responses
 
 ### 9.1 `LIST` response (catalog)
 
-Server → Client:
+Server -> Client:
 
 | Field   | Type  | Size | Description             |
 | ------- | ----- | ---- | ----------------------- |
 | Header  | bytes | 4    | ASCII `"JTPL"`          |
 | Count   | u16   | 2    | Number of entries (`N`) |
-| Entries | —     | var  | Repeated `N` times      |
+| Entries | -     | var  | Repeated `N` times      |
 
 Each entry:
 
@@ -206,7 +248,7 @@ Each entry:
 | Flags    | u8          | 1       | File type + feature flags   |
 | NameLen  | u16         | 2       | Filename length in bytes    |
 | Filename | bytes       | NameLen | UTF-8 basename              |
-| Size     | varint(u32) | 1–5     | Size of image data in bytes |
+| Size     | varint(u32) | 1-5     | Size of image data in bytes |
 
 Notes:
 
@@ -216,40 +258,78 @@ Notes:
 
 ### 9.2 Image packet
 
-Image packets are used by multiple responses (e.g., `GET_BY_ID`, `BATCH`).
+Image packets are used by multiple responses (e.g., `GET_BY_ID`, `BATCH`,
+`LIST_AND_GET`).
 
-Server → Client:
+Server -> Client:
 
 | Field   | Type        | Size   | Description               |
 | ------- | ----------- | ------ | ------------------------- |
 | Flags   | u8          | 1      | File type + feature flags |
-| Length  | varint(u32) | 1–5    | Data length in bytes      |
+| Length  | varint(u32) | 1-5    | Data length in bytes      |
 | ImageID | u64         | 8      | Image ID (big-endian)     |
 | Data    | bytes       | Length | Raw image bytes           |
 
 Receivers **SHOULD** validate:
 
-- `ImageID == xxHash64(Data, seed=0)`
+- `ImageID == xxHash64(Data, seed=0)` (after decompression if compressed)
 
 If validation fails, receivers **SHOULD** treat the data as corrupt.
 
 ### 9.3 `BATCH` response
 
-Server → Client:
+Server -> Client:
 
 | Field        | Type        | Size | Description                       |
 | ------------ | ----------- | ---- | --------------------------------- |
 | Header       | bytes       | 4    | ASCII `"JTPB"`                    |
-| MissingCount | varint(u32) | 1–5  | Number of missing images (`M`)    |
-| Images       | —           | var  | Repeated `M` times (image packet) |
+| MissingCount | varint(u32) | 1-5  | Number of missing images (`M`)    |
+| Images       | -           | var  | Repeated `M` times (image packet) |
 
 The client reads exactly `M` image packets.
 
+### 9.4 `LIST_AND_GET` response
+
+Server -> Client:
+
+| Field   | Type  | Size | Description                      |
+| ------- | ----- | ---- | -------------------------------- |
+| Header  | bytes | 4    | ASCII `"JTPG"`                   |
+| Count   | u16   | 2    | Number of images (`N`)           |
+| Images  | -     | var  | Repeated `N` times (image packet)|
+
+The client reads exactly `N` image packets. Each packet contains the ImageID,
+so no separate catalog is needed.
+
 ## 10. Error Handling
 
-JTP does not define a structured error frame.
+### 10.1 Structured ERROR response
 
-Servers may signal errors by:
+JTP defines an optional structured error response for servers that wish to
+provide detailed error information.
+
+Server -> Client:
+
+| Field      | Type  | Size       | Description             |
+| ---------- | ----- | ---------- | ----------------------- |
+| Header     | bytes | 4          | ASCII `"JTPE"`          |
+| ErrorCode  | u8    | 1          | Error code (see below)  |
+| MessageLen | u16   | 2          | Length of message       |
+| Message    | bytes | MessageLen | UTF-8 error description |
+
+**Error Codes:**
+
+| Code | Name               | Description                     |
+| ---- | ------------------ | ------------------------------- |
+| 1    | NotFound           | Requested resource not found    |
+| 2    | InvalidRequest     | Malformed or invalid request    |
+| 3    | ServerError        | Internal server error           |
+| 4    | UnsupportedFeature | Feature not supported by server |
+| 5    | RateLimited        | Request rate limit exceeded     |
+
+### 10.2 Legacy Error Handling
+
+Servers may also signal errors by:
 
 - closing the connection
 - terminating the TLS session
@@ -266,8 +346,10 @@ Receivers should defend against resource exhaustion:
 - large `Count/HaveCount`
 
 Because `Length` and `Size` are `u32`, the maximum single image size supported
-by this framing is `4,294,967,295` bytes (4 GiB − 1). Implementations **MAY**
+by this framing is `4,294,967,295` bytes (4 GiB - 1). Implementations **MAY**
 impose lower limits.
+
+Servers **SHOULD** reject BATCH requests with `HaveCount` exceeding 1,000,000.
 
 ## 12. Extensibility
 

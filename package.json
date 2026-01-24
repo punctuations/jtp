@@ -1,0 +1,17 @@
+{
+  "name": "http-benchmark-server",
+  "version": "1.0.0",
+  "description": "Simple HTTP server for benchmarking against JTP",
+  "main": "server.js",
+  "scripts": {
+    "no-tls": "node examples/benchmark/http/server.js",
+    "tls": "node examples/benchmark/http/server-https.js"
+  },
+  "keywords": [
+    "http",
+    "benchmark",
+    "image-server"
+  ],
+  "author": "",
+  "license": "MIT"
+}

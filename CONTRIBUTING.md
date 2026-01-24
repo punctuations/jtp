@@ -2,107 +2,94 @@
 
 Thanks for your interest in contributing to **JTP (Jason Transfer Protocol)**.
 
-## Quick start
+## Project Structure
 
-- Rust workspace lives at the repo root (binaries: `client`, `server`).
-- Docs site is a Next.js app in `docs/`.
-- Protocol code lives in `src/protocol.rs`.
+- `src/protocol.rs` - Core protocol implementation
+- `src/bin/server.rs` - TLS server binary
+- `src/bin/client.rs` - TLS client binary
+- `crates/jtp-wasm/` - WebAssembly bindings for ImageID computation
 
-## Ways to contribute
-
-- Fix bugs in the client/server/protocol.
-- Improve protocol documentation and examples.
-- Add interoperability tests or fuzzing (if you're into that).
-- Improve performance, error handling, and UX.
-
-## Development setup
+## Development Setup
 
 ### Prerequisites
 
-- Rust toolchain (stable)
-- Node.js + npm (for `docs/`)
+- Rust toolchain (stable, 1.72+)
 
-### Build / test (Rust)
-
-From the repo root:
+### Build and Test
 
 ```bash
 cargo build --workspace
 cargo test --workspace
 ```
 
-Run the reference server/client:
+### Run Server and Client
 
 ```bash
+# Terminal 1: Start server
 cargo run --bin server
+
+# Terminal 2: Run client
 cargo run --bin client
 ```
 
-### Build / test (Docs)
+## Ways to Contribute
 
-From `docs/`:
+- Fix bugs in the client/server/protocol
+- Improve performance and error handling
+- Add tests or fuzzing
+- Improve documentation
 
-```bash
-bun install
-bun run build
-```
+## Protocol Compatibility
 
-## Protocol compatibility rules
+Changes to the binary protocol must be handled carefully:
 
-This repo includes a custom binary protocol. Changes to framing/encoding must be
-treated carefully.
-
-When changing the protocol:
-
-- Update the authoritative spec in `README.md` and the docs page in
-  `docs/app/page.tsx`.
-- Keep the Rust server and Rust client consistent.
-- Keep the wasm helper (`crates/jtp-wasm`) consistent if ImageID computation or
-  encoding changes.
-- Prefer adding new request/response types rather than breaking existing ones,
-  unless the change is explicitly a breaking version bump.
+1. **Update documentation**: Modify `README.md` and `RFC.md`
+2. **Keep implementations consistent**: Server, client, and jtp-wasm must match
+3. **Prefer additions over breaking changes**: Add new request types rather than
+   modifying existing ones
 
 ### ImageID
 
 ImageIDs are defined as:
 
-- `ImageID = xxHash64(file_bytes, seed=0)`
-- Encoded on the wire as `u64` big-endian.
+```
+ImageID = xxHash64(file_bytes, seed=0)
+```
+
+Encoded on the wire as `u64` big-endian.
 
 If you change this, update:
-
 - `src/protocol.rs`
 - `src/bin/server.rs`
 - `src/bin/client.rs`
 - `crates/jtp-wasm/src/lib.rs`
 - Documentation
 
-## Code style
+## Code Style
 
-- Keep changes focused and minimal.
-- Follow existing formatting (use `cargo fmt` if you have it).
-- Avoid adding new dependencies unless there's a clear win.
+- Run `cargo fmt` before committing
+- Run `cargo clippy` to catch common issues
+- Keep changes focused and minimal
+- Avoid adding dependencies unless necessary
 
-## Submitting changes
+## Submitting Changes
 
-1. Create a branch.
-2. Make your change.
-3. Ensure builds pass:
-   - `cargo build --workspace`
-   - `cargo test --workspace`
-   - `bun run build` (if docs changed)
-4. Open a PR with:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Ensure `cargo build --workspace` and `cargo test --workspace` pass
+5. Open a pull request with:
    - What changed
    - Why it changed
-   - Any protocol compatibility notes
+   - Protocol compatibility notes (if applicable)
    - How to test
 
-## Reporting bugs
+## Reporting Bugs
 
 When filing an issue, please include:
 
-- OS + Rust version
+- OS and Rust version
 - Steps to reproduce
 - Expected vs actual behavior
 - Logs with `--verbose` if relevant
-- If protocol-related: a hexdump / framing description of the bytes exchanged
+- If protocol-related: hexdump of the bytes exchanged
