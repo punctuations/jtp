@@ -18,8 +18,8 @@ Thanks for your interest in contributing to **JTP (Jason Transfer Protocol)**.
 ### Build and Test
 
 ```bash
-cargo build --workspace
-cargo test --workspace
+cargo build
+cargo test
 ```
 
 ### Run Server and Client
