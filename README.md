@@ -51,6 +51,8 @@ cargo run --bin client
 --only SUBSTRING          Only serve files containing SUBSTRING
 --compression-threshold   Min ratio to use compression (default: 0.95)
 --keep-alive-timeout SEC  Idle timeout in seconds (default: 30)
+--rate-limit N            Max requests per window (default: unlimited)
+--rate-limit-window SEC   Rate limit window in seconds (default: 1)
 --no-tls, --plain         Plain TCP mode (no encryption)
 --verbose, -v             Enable detailed logging
 ```
