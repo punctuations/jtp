@@ -477,7 +477,9 @@ async fn receive_image(
             remaining -= to_read;
         }
         vlog!(verbose, "Streamed {} bytes to temp file", length);
-        tokio::fs::read(&temp_path).await?
+        let data = tokio::fs::read(&temp_path).await?;
+        tokio::fs::remove_file(&temp_path).await?;
+        data
     } else {
         let mut buf = vec![0u8; length as usize];
         stream.read_exact(&mut buf).await?;
