@@ -24,10 +24,60 @@ use rustls::ServerConfig;
 use rustls::pki_types::{ CertificateDer, PrivateKeyDer };
 use std::sync::Arc;
 use std::io::BufReader;
+use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
-use std::collections::HashSet;
-use std::time::Duration;
+use std::collections::{ HashMap, HashSet };
+use std::time::{ Duration, Instant };
+use tokio::sync::Mutex;
+
+/// Simple sliding window rate limiter per IP address
+struct RateLimiter {
+    requests: Mutex<HashMap<IpAddr, Vec<Instant>>>,
+    max_requests: usize,
+    window: Duration,
+}
+
+impl RateLimiter {
+    fn new(max_requests: usize, window: Duration) -> Self {
+        Self {
+            requests: Mutex::new(HashMap::new()),
+            max_requests,
+            window,
+        }
+    }
+
+    /// Check if a request from this IP is allowed. Returns true if allowed.
+    async fn check(&self, ip: IpAddr) -> bool {
+        let mut requests = self.requests.lock().await;
+        let now = Instant::now();
+        let window_start = now - self.window;
+
+        let timestamps = requests.entry(ip).or_insert_with(Vec::new);
+
+        // Remove old timestamps outside the window
+        timestamps.retain(|&t| t > window_start);
+
+        if timestamps.len() >= self.max_requests {
+            false
+        } else {
+            timestamps.push(now);
+            true
+        }
+    }
+
+    /// Periodically clean up old entries to prevent memory leaks
+    async fn cleanup(&self) {
+        let mut requests = self.requests.lock().await;
+        let now = Instant::now();
+        let window_start = now - self.window;
+
+        requests.retain(|_, timestamps| {
+            timestamps.retain(|&t| t > window_start);
+            !timestamps.is_empty()
+        });
+    }
+}
 
 macro_rules! vlog {
     (
@@ -94,6 +144,8 @@ struct ServerArgs {
     keep_alive_timeout: Duration,
     tcp_nodelay: bool,
     no_tls: bool, // Plain TCP mode for trusted networks/benchmarking
+    rate_limit: Option<usize>,      // Max requests per window (None = disabled)
+    rate_limit_window: Duration,    // Time window for rate limiting
 }
 
 fn parse_args() -> ServerArgs {
@@ -107,6 +159,8 @@ fn parse_args() -> ServerArgs {
     let mut keep_alive_timeout = Duration::from_secs(30);
     let mut tcp_nodelay = true;
     let mut no_tls = false;
+    let mut rate_limit: Option<usize> = None;
+    let mut rate_limit_window = Duration::from_secs(60);
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -156,6 +210,20 @@ fn parse_args() -> ServerArgs {
             "--no-tls" | "--plain" => {
                 no_tls = true;
             }
+            "--rate-limit" => {
+                if let Some(v) = args.next() {
+                    if let Ok(limit) = v.parse::<usize>() {
+                        rate_limit = Some(limit);
+                    }
+                }
+            }
+            "--rate-limit-window" => {
+                if let Some(v) = args.next() {
+                    if let Ok(secs) = v.parse::<u64>() {
+                        rate_limit_window = Duration::from_secs(secs);
+                    }
+                }
+            }
             "-v" | "--verbose" => {
                 verbose = true;
             }
@@ -170,6 +238,8 @@ Options:\n  \
   --only SUBSTRING          Only serve files whose basename contains SUBSTRING\n  \
   --compression-threshold   Min ratio to use compression (default: 0.95)\n  \
   --keep-alive-timeout SEC  Keep-alive idle timeout in seconds (default: 30)\n  \
+  --rate-limit N            Max requests per IP per window (default: disabled)\n  \
+  --rate-limit-window SEC   Rate limit window in seconds (default: 60)\n  \
   --no-tcp-nodelay          Disable TCP_NODELAY (Nagle's algorithm enabled)\n  \
   --no-tls, --plain         Plain TCP mode (no TLS) for trusted networks\n  \
   --verbose                 Print per-connection and request logs"
@@ -191,6 +261,8 @@ Options:\n  \
         keep_alive_timeout,
         tcp_nodelay,
         no_tls,
+        rate_limit,
+        rate_limit_window,
     }
 }
 
@@ -449,17 +521,36 @@ async fn main() -> tokio::io::Result<()> {
 
     vlog!(
         args.verbose,
-        "Server args: bind={}, images_dir={}, only={:?}, no_tls={}",
+        "Server args: bind={}, images_dir={}, only={:?}, no_tls={}, rate_limit={:?}",
         args.bind,
         args.images_dir.display(),
         args.only_name_contains,
-        args.no_tls
+        args.no_tls,
+        args.rate_limit
     );
 
     let catalog = Arc::new(
         ImageCatalog::from_dir(&args.images_dir, args.only_name_contains.as_deref())
     );
     println!("Loaded {} images", catalog.images.len());
+
+    // Create rate limiter if configured
+    let rate_limiter: Option<Arc<RateLimiter>> = args.rate_limit.map(|limit| {
+        Arc::new(RateLimiter::new(limit, args.rate_limit_window))
+    });
+
+    // Spawn cleanup task if rate limiting is enabled
+    if let Some(ref limiter) = rate_limiter {
+        let limiter_clone = Arc::clone(limiter);
+        let cleanup_interval = args.rate_limit_window;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(cleanup_interval).await;
+                limiter_clone.cleanup().await;
+            }
+        });
+    }
+
     if args.verbose {
         println!(
             "Compression threshold: {:.1}% (ratio < {:.2})",
@@ -472,6 +563,13 @@ async fn main() -> tokio::io::Result<()> {
             args.tcp_nodelay,
             !args.no_tls
         );
+        if let Some(limit) = args.rate_limit {
+            println!(
+                "Rate limit: {} requests per {:?} per IP",
+                limit,
+                args.rate_limit_window
+            );
+        }
     }
 
     let listener = TcpListener::bind(&args.bind).await?;
@@ -489,6 +587,7 @@ async fn main() -> tokio::io::Result<()> {
         loop {
             let (socket, addr) = listener.accept().await?;
             let catalog = Arc::clone(&catalog);
+            let rate_limiter = rate_limiter.clone();
 
             vlog!(verbose, "Accepted TCP connection from {}", addr);
 
@@ -499,6 +598,17 @@ async fn main() -> tokio::io::Result<()> {
             }
 
             tokio::spawn(async move {
+                // Check rate limit
+                if let Some(ref limiter) = rate_limiter {
+                    if !limiter.check(addr.ip()).await {
+                        vlog!(verbose, "Rate limited: {}", addr.ip());
+                        let mut stream = BufWriter::with_capacity(64 * 1024, socket);
+                        let _ = send_error(&mut stream, ErrorCode::RateLimited, "too many requests").await;
+                        let _ = stream.flush().await;
+                        return;
+                    }
+                }
+
                 let stream = BufWriter::with_capacity(64 * 1024, socket);
                 handle_requests(
                     stream,
@@ -532,6 +642,7 @@ async fn main() -> tokio::io::Result<()> {
             let (socket, addr) = listener.accept().await?;
             let acceptor = acceptor.clone();
             let catalog = Arc::clone(&catalog);
+            let rate_limiter = rate_limiter.clone();
 
             vlog!(verbose, "Accepted TCP connection from {}", addr);
 
@@ -542,6 +653,20 @@ async fn main() -> tokio::io::Result<()> {
             }
 
             tokio::spawn(async move {
+                // Check rate limit before TLS handshake to save resources
+                if let Some(ref limiter) = rate_limiter {
+                    if !limiter.check(addr.ip()).await {
+                        vlog!(verbose, "Rate limited: {}", addr.ip());
+                        // For TLS, we need to complete handshake to send error
+                        if let Ok(tls_stream) = acceptor.accept(socket).await {
+                            let mut stream = BufWriter::with_capacity(64 * 1024, tls_stream);
+                            let _ = send_error(&mut stream, ErrorCode::RateLimited, "too many requests").await;
+                            let _ = stream.flush().await;
+                        }
+                        return;
+                    }
+                }
+
                 let tls_stream = match acceptor.accept(socket).await {
                     Ok(s) => s,
                     Err(e) => {

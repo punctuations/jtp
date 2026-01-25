@@ -7,12 +7,6 @@ description = "Jason Transfer Protocol: high-performance, batch image transfer p
 license = "MIT"
 repository = "https://github.com/punctuations/jtp"
 
-[workspace]
-members = [
-	".",
-	"crates/jtp-wasm",
-]
-
 [dependencies]
 tokio = { version = "1.30", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
