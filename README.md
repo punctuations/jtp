@@ -1,6 +1,7 @@
 # Jason Transfer Protocol (JTP)
 
-**JTP** is a high-performance binary protocol for transferring images over TCP with optional TLS encryption and intelligent compression.
+**JTP** is a high-performance binary protocol for transferring images over TCP
+with optional TLS encryption and intelligent compression.
 
 ## Features
 
@@ -29,11 +30,13 @@ cargo build --release
 ### Running
 
 **Server** (listens on `0.0.0.0:8443` by default):
+
 ```bash
 cargo run --bin server -- --images ./images
 ```
 
 **Client** (connects to `127.0.0.1:8443` by default):
+
 ```bash
 cargo run --bin client
 ```
@@ -41,6 +44,7 @@ cargo run --bin client
 ### Command-Line Options
 
 **Server:**
+
 ```
 --bind ADDR               Bind address (default: 0.0.0.0:8443)
 --images DIR              Images directory (default: images)
@@ -52,6 +56,7 @@ cargo run --bin client
 ```
 
 **Client:**
+
 ```
 --addr HOST:PORT          Server address (default: 127.0.0.1:8443)
 --tls, --secure           Use TLS encryption
@@ -73,42 +78,36 @@ JTP uses a request/response model over TCP (optionally TLS-wrapped).
 ### ImageID
 
 Images are identified by a 64-bit content hash:
+
 ```
 ImageID = xxHash64(image_bytes, seed=0)
 ```
 
 ### Request Types
 
-| Type | Code | Description |
-|------|------|-------------|
-| LIST | 1 | Get catalog of available images |
-| GET_BY_ID | 0 | Request specific images by ID |
-| BATCH | 2 | Delta sync (send IDs you have, receive missing) |
-| LIST_AND_GET | 5 | Combined catalog + all images |
+| Type         | Code | Description                                     |
+| ------------ | ---- | ----------------------------------------------- |
+| LIST         | 1    | Get catalog of available images                 |
+| GET_BY_ID    | 0    | Request specific images by ID                   |
+| BATCH        | 2    | Delta sync (send IDs you have, receive missing) |
+| LIST_AND_GET | 5    | Combined catalog + all images                   |
 
 ### Response Headers
 
-| Header | Description |
-|--------|-------------|
+| Header | Description             |
+| ------ | ----------------------- |
 | `JTPL` | LIST response (catalog) |
-| `JTPB` | BATCH response |
-| `JTPG` | LIST_AND_GET response |
-| `JTPE` | ERROR response |
+| `JTPB` | BATCH response          |
+| `JTPG` | LIST_AND_GET response   |
+| `JTPE` | ERROR response          |
 
 For the complete protocol specification, see [RFC.md](RFC.md).
 
 ## Compression
 
-JTP uses Zstd compression with adaptive levels based on file size. Only compressible formats (BMP, unknown) are compressed. Already-compressed formats (PNG, JPEG, WebP, GIF) are sent as-is.
-
-## WebAssembly Support
-
-The `crates/jtp-wasm` crate provides ImageID computation for browser clients:
-
-```bash
-cd crates/jtp-wasm
-cargo build --target wasm32-unknown-unknown --release
-```
+JTP uses Zstd compression with adaptive levels based on file size. Only
+compressible formats (BMP, unknown) are compressed. Already-compressed formats
+(PNG, JPEG, WebP, GIF) are sent as-is.
 
 ## Contributing
 

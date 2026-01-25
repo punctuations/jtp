@@ -7,7 +7,6 @@ Thanks for your interest in contributing to **JTP (Jason Transfer Protocol)**.
 - `src/protocol.rs` - Core protocol implementation
 - `src/bin/server.rs` - TLS server binary
 - `src/bin/client.rs` - TLS client binary
-- `crates/jtp-wasm/` - WebAssembly bindings for ImageID computation
 
 ## Development Setup
 
@@ -44,7 +43,7 @@ cargo run --bin client
 Changes to the binary protocol must be handled carefully:
 
 1. **Update documentation**: Modify `README.md` and `RFC.md`
-2. **Keep implementations consistent**: Server, client, and jtp-wasm must match
+2. **Keep implementations consistent**: Server and client must match
 3. **Prefer additions over breaking changes**: Add new request types rather than
    modifying existing ones
 
@@ -63,7 +62,6 @@ If you change this, update:
 - `src/protocol.rs`
 - `src/bin/server.rs`
 - `src/bin/client.rs`
-- `crates/jtp-wasm/src/lib.rs`
 - Documentation
 
 ## Code Style
