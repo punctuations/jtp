@@ -3,14 +3,14 @@ import Mermaid from "@/components/Mermaid";
 export default function JTP() {
   return (
     <div className="min-h-screen bg-white text-black">
-      <main className="mx-auto w-full max-w-4xl px-6 py-14 font-sans">
+      <main className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-14 font-sans">
         <header className="mb-10">
-          <div className="flex flex-row justify-between">
-            <h1 className="text-3xl font-semibold tracking-tight">
+          <div className="flex flex-col gap-4 sm:flex-row sm:justify-between">
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
               Jason Transfer Protocol &mdash; JTP
               <span className="text-slate-300">/1.0</span>{" "}
             </h1>
-            <p className="self-end mr-6">
+            <p className="text-sm sm:text-base sm:self-end sm:mr-6">
               {new Date("Jan 24, 2026").toLocaleDateString("en-CA", {
                 dateStyle: "long",
               })}
@@ -22,39 +22,66 @@ export default function JTP() {
             request/response protocol for listing and transferring images over
             TCP (optionally TLS), keyed by xxHash64-derived IDs.
           </p>
-          <nav className="mt-6 flex flex-wrap justify-between gap-x-4 gap-y-2 text-sm text-black/80">
-            <div className="flex flex-wrap gap-x-4 gap-y-2">
-              <a className="underline underline-offset-4" href="#abstract">
+          <nav className="mt-8 space-y-4 sm:space-y-0 sm:flex sm:flex-wrap sm:justify-between sm:gap-6 text-sm text-black/70">
+            <div className="flex flex-wrap gap-x-5 sm:gap-y-0 gap-y-2 text-xs sm:text-sm">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#abstract"
+              >
                 Abstract
               </a>
-              <a className="underline underline-offset-4" href="#transport">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#transport"
+              >
                 Transport
               </a>
-              <a className="underline underline-offset-4" href="#imageid">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#imageid"
+              >
                 ImageID
               </a>
-              <a className="underline underline-offset-4" href="#flags">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#flags"
+              >
                 Flags
               </a>
-              <a className="underline underline-offset-4" href="#requests">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#requests"
+              >
                 Requests
               </a>
-              <a className="underline underline-offset-4" href="#responses">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#responses"
+              >
                 Responses
               </a>
-              <a className="underline underline-offset-4" href="#errors">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#errors"
+              >
                 Errors
               </a>
-              <a className="underline underline-offset-4" href="#examples">
+              <a
+                className="underline underline-offset-4 transition-colors hover:text-black"
+                href="#examples"
+              >
                 Examples
               </a>
             </div>
-            <div className="flex gap-x-4">
-              <a className="underline underline-offset-4" href="/sudeikis">
+            <div className="flex gap-x-5 border-t border-black/10 pt-3 text-xs sm:text-sm sm:border-t-0 sm:border-l sm:border-black/10 sm:pl-6 sm:pt-0">
+              <a
+                className="underline underline-offset-4 font-medium transition-colors hover:text-black"
+                href="/sudeikis"
+              >
                 Live Example
               </a>
               <a
-                className="underline underline-offset-4"
+                className="underline underline-offset-4 font-medium transition-colors hover:text-black"
                 href="https://github.com/punctuations/jtp"
                 target="_blank"
                 rel="noreferrer"
@@ -67,7 +94,7 @@ export default function JTP() {
 
         <section id="abstract" className="mb-10">
           <h2 className="text-xl font-semibold"># Abstract</h2>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-black/80">
+          <p className="mt-3 max-w-3xl text-xs sm:text-sm leading-6 text-black/80">
             JTP is a lightweight binary protocol for fast image distribution. A
             client first discovers available content with a catalog request
             (LIST), then requests one or more images by their content-derived
@@ -102,10 +129,10 @@ export default function JTP() {
 
         <section id="transport" className="mb-10">
           <h2 className="text-xl font-semibold"># Transport</h2>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             JTP requires an ordered, reliable byte stream transport.
           </p>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-black/80">
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-xs sm:text-sm leading-6 text-black/80">
             <li>
               The default transport is <strong>TCP</strong>.
             </li>
@@ -119,8 +146,10 @@ export default function JTP() {
             </li>
           </ul>
 
-          <h3 className="mt-6 text-base font-semibold">TLS and ALPN</h3>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-black/80">
+          <h3 className="mt-6 text-sm sm:text-base font-semibold">
+            TLS and ALPN
+          </h3>
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-xs sm:text-sm leading-6 text-black/80">
             <li>
               When TLS is used, servers <strong>MAY</strong> advertise ALPN
               protocol identifier: <span className="font-mono">jtp/1</span>
@@ -135,13 +164,15 @@ export default function JTP() {
             </li>
           </ul>
 
-          <h3 className="mt-6 text-base font-semibold">Keep-Alive</h3>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <h3 className="mt-6 text-sm sm:text-base font-semibold">
+            Keep-Alive
+          </h3>
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             JTP supports connection reuse through a keep-alive mechanism. When
             enabled, multiple requests can be sent over a single connection,
             avoiding repeated TLS handshakes.
           </p>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-black/80">
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-xs sm:text-sm leading-6 text-black/80">
             <li>
               If the <span className="font-mono">keep-alive</span> flag is set
               in a request, the server <strong>SHOULD</strong> keep the
@@ -164,14 +195,14 @@ export default function JTP() {
 
         <section id="imageid" className="mb-10">
           <h2 className="text-xl font-semibold"># ImageID</h2>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             <span className="font-mono">ImageID</span> is a 64-bit value
             computed from the raw image file bytes:
           </p>
-          <pre className="mt-4 overflow-x-auto rounded-lg border border-black/10 bg-white p-4 font-mono text-xs leading-5">
+          <pre className="mt-4 overflow-x-auto rounded-lg border border-black/10 bg-white p-3 sm:p-4 font-mono text-xs leading-5">
             ImageID = xxHash64(image_bytes, seed = 0)
           </pre>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             On the wire, ImageID is transmitted as{" "}
             <span className="font-mono">u64</span> big-endian. When rendered as
             hex, the recommended representation is the hex encoding of the 8
@@ -181,7 +212,7 @@ export default function JTP() {
 
         <section id="flags" className="mb-10">
           <h2 className="text-xl font-semibold"># Flags</h2>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             JTP uses a one-byte <span className="font-mono">Flags</span> field
             with the following bit assignments:
           </p>
@@ -194,7 +225,9 @@ export default function JTP() {
             ]}
           />
 
-          <h3 className="mt-6 text-base font-semibold">File Type Codes</h3>
+          <h3 className="mt-6 text-sm sm:text-base font-semibold">
+            File Type Codes
+          </h3>
           <Table
             rows={[
               ["0", "PNG", ""],
@@ -207,8 +240,10 @@ export default function JTP() {
             ]}
           />
 
-          <h3 className="mt-6 text-base font-semibold">Compression</h3>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <h3 className="mt-6 text-sm sm:text-base font-semibold">
+            Compression
+          </h3>
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             When bit 3 is set, the image data is Zstd compressed. Receivers{" "}
             <strong>MUST</strong> decompress before use. If a receiver does not
             support compression, it <strong>SHOULD</strong> fail the request
@@ -218,14 +253,16 @@ export default function JTP() {
 
         <section id="requests" className="mb-10">
           <h2 className="text-xl font-semibold"># Requests</h2>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             The first byte of every request is{" "}
             <span className="font-mono">ReqType (u8)</span>. For requests that
             support connection reuse, the second byte is{" "}
             <span className="font-mono">RequestFlags (u8)</span>.
           </p>
 
-          <h3 className="mt-6 text-base font-semibold">Request Flags</h3>
+          <h3 className="mt-6 text-sm sm:text-base font-semibold">
+            Request Flags
+          </h3>
           <Table
             rows={[
               [
@@ -239,8 +276,10 @@ export default function JTP() {
 
           <div className="mt-6 grid gap-6">
             <div>
-              <h3 className="text-base font-semibold">LIST (ReqType = 1)</h3>
-              <p className="mt-2 text-sm leading-6 text-black/80">
+              <h3 className="text-sm sm:text-base font-semibold">
+                LIST (ReqType = 1)
+              </h3>
+              <p className="mt-2 text-xs sm:text-sm leading-6 text-black/80">
                 Request the catalog of available images.
               </p>
               <Table
@@ -252,10 +291,10 @@ export default function JTP() {
             </div>
 
             <div>
-              <h3 className="text-base font-semibold">
+              <h3 className="text-sm sm:text-base font-semibold">
                 GET_BY_ID (ReqType = 0)
               </h3>
-              <p className="mt-2 text-sm leading-6 text-black/80">
+              <p className="mt-2 text-xs sm:text-sm leading-6 text-black/80">
                 Request specific images by their IDs. Count{" "}
                 <strong>MUST NOT</strong> exceed 255.
               </p>
@@ -270,8 +309,10 @@ export default function JTP() {
             </div>
 
             <div>
-              <h3 className="text-base font-semibold">BATCH (ReqType = 2)</h3>
-              <p className="mt-2 text-sm leading-6 text-black/80">
+              <h3 className="text-sm sm:text-base font-semibold">
+                BATCH (ReqType = 2)
+              </h3>
+              <p className="mt-2 text-xs sm:text-sm leading-6 text-black/80">
                 Delta sync: client sends the IDs it already has; server returns
                 only the missing images.
               </p>
@@ -286,10 +327,10 @@ export default function JTP() {
             </div>
 
             <div>
-              <h3 className="text-base font-semibold">
+              <h3 className="text-sm sm:text-base font-semibold">
                 LIST_AND_GET (ReqType = 5)
               </h3>
-              <p className="mt-2 text-sm leading-6 text-black/80">
+              <p className="mt-2 text-xs sm:text-sm leading-6 text-black/80">
                 Combined catalog listing and image transfer in a single
                 round-trip. Server responds with all available images.
               </p>
@@ -308,7 +349,7 @@ export default function JTP() {
 
           <div className="mt-6 grid gap-6">
             <div>
-              <h3 className="text-base font-semibold">
+              <h3 className="text-sm sm:text-base font-semibold">
                 LIST Response (Header = JTPL)
               </h3>
               <Table
@@ -318,7 +359,7 @@ export default function JTP() {
                   ["Entries", "variable", "Repeated Count times"],
                 ]}
               />
-              <p className="mt-3 text-sm leading-6 text-black/80">
+              <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
                 Each entry:
               </p>
               <Table
@@ -333,8 +374,10 @@ export default function JTP() {
             </div>
 
             <div>
-              <h3 className="text-base font-semibold">Image Packet</h3>
-              <p className="mt-2 text-sm leading-6 text-black/80">
+              <h3 className="text-sm sm:text-base font-semibold">
+                Image Packet
+              </h3>
+              <p className="mt-2 text-xs sm:text-sm leading-6 text-black/80">
                 Used by GET_BY_ID, BATCH, and LIST_AND_GET responses.
               </p>
               <Table
@@ -345,7 +388,7 @@ export default function JTP() {
                   ["Data", "Length", "Raw image bytes"],
                 ]}
               />
-              <p className="mt-3 text-sm leading-6 text-black/80">
+              <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
                 Receivers <strong>SHOULD</strong> validate:{" "}
                 <span className="font-mono">
                   ImageID == xxHash64(Data, seed=0)
@@ -355,7 +398,7 @@ export default function JTP() {
             </div>
 
             <div>
-              <h3 className="text-base font-semibold">
+              <h3 className="text-sm sm:text-base font-semibold">
                 BATCH Response (Header = JTPB)
               </h3>
               <Table
@@ -372,7 +415,7 @@ export default function JTP() {
             </div>
 
             <div>
-              <h3 className="text-base font-semibold">
+              <h3 className="text-sm sm:text-base font-semibold">
                 LIST_AND_GET Response (Header = JTPG)
               </h3>
               <Table
@@ -388,12 +431,12 @@ export default function JTP() {
 
         <section id="errors" className="mb-10">
           <h2 className="text-xl font-semibold"># Error Handling</h2>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             JTP defines an optional structured error response for servers that
             wish to provide detailed error information.
           </p>
 
-          <h3 className="mt-6 text-base font-semibold">
+          <h3 className="mt-6 text-sm sm:text-base font-semibold">
             ERROR Response (Header = JTPE)
           </h3>
           <Table
@@ -405,7 +448,9 @@ export default function JTP() {
             ]}
           />
 
-          <h3 className="mt-6 text-base font-semibold">Error Codes</h3>
+          <h3 className="mt-6 text-sm sm:text-base font-semibold">
+            Error Codes
+          </h3>
           <Table
             rows={[
               ["1", "NotFound", "Requested resource not found"],
@@ -416,7 +461,7 @@ export default function JTP() {
             ]}
           />
 
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             Servers may also signal errors by closing the connection or
             terminating the TLS session. Clients should treat unexpected EOF,
             invalid headers, or decoding errors as request failure.
@@ -425,7 +470,7 @@ export default function JTP() {
 
         <section id="limits" className="mb-10">
           <h2 className="text-xl font-semibold"># Limits</h2>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-black/80">
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-xs sm:text-sm leading-6 text-black/80">
             <li>
               Maximum single image size: <strong>4 GiB - 1</strong> (u32
               framing)
@@ -445,7 +490,7 @@ export default function JTP() {
 
         <section id="examples" className="mb-10">
           <h2 className="text-xl font-semibold"># Examples</h2>
-          <p className="mt-3 text-sm leading-6 text-black/80">
+          <p className="mt-3 text-xs sm:text-sm leading-6 text-black/80">
             Hex dumps are spaced by byte. Fixed-width integers are big-endian;
             sizes/lengths use unsigned LEB128 varints.
           </p>
@@ -521,7 +566,7 @@ export default function JTP() {
           </ul>
         </section>
 
-        <footer className="pt-6 text-xs text-black/60">
+        <footer className="pt-6 text-xs sm:text-sm text-black/60">
           <a
             className="underline underline-offset-4"
             href="https://github.com/punctuations/jtp"
@@ -545,26 +590,32 @@ function Table({
 }) {
   return (
     <div className="mt-3 overflow-x-auto rounded-lg border border-black/10">
-      <table className="w-full border-collapse text-left text-sm">
+      <table className="w-full border-collapse text-left text-xs sm:text-sm">
         <thead className="bg-black/[0.03]">
           <tr>
-            <th className="whitespace-nowrap px-3 py-2 font-semibold">Field</th>
-            <th className="whitespace-nowrap px-3 py-2 font-semibold">
+            <th className="whitespace-nowrap px-2 sm:px-3 py-2 font-semibold text-xs">
+              Field
+            </th>
+            <th className="whitespace-nowrap px-2 sm:px-3 py-2 font-semibold text-xs">
               Size (bytes)
             </th>
-            <th className="px-3 py-2 font-semibold">Description</th>
+            <th className="px-2 sm:px-3 py-2 font-semibold text-xs">
+              Description
+            </th>
           </tr>
         </thead>
         <tbody>
           {rows.map(([field, size, description], i) => (
             <tr key={`${field}-${i}`} className="border-t border-black/10">
-              <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">
+              <td className="whitespace-nowrap px-2 sm:px-3 py-2 font-mono text-[10px] sm:text-xs">
                 {field}
               </td>
-              <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">
+              <td className="whitespace-nowrap px-2 sm:px-3 py-2 font-mono text-[10px] sm:text-xs">
                 {size}
               </td>
-              <td className="px-3 py-2 text-black/80">{description}</td>
+              <td className="px-2 sm:px-3 py-2 text-black/80 text-xs sm:text-sm">
+                {description}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -584,11 +635,11 @@ function Example({
 }) {
   return (
     <div className="mt-6">
-      <h3 className="text-base font-semibold">{title}</h3>
-      <pre className="mt-3 overflow-x-auto rounded-lg border border-black/10 bg-white p-4 font-mono text-xs leading-5">
+      <h3 className="text-sm sm:text-base font-semibold">{title}</h3>
+      <pre className="mt-3 overflow-x-auto rounded-lg border border-black/10 bg-white p-3 sm:p-4 font-mono text-[10px] sm:text-xs leading-5">
         {hexLines.join("\n")}
       </pre>
-      <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-black/80">
+      <ul className="mt-3 list-disc space-y-1 pl-5 text-xs sm:text-sm leading-6 text-black/80">
         {notes.map((n, i) => (
           <li key={i}>{n}</li>
         ))}
