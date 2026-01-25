@@ -15,7 +15,7 @@ use jtp::protocol::{
     RESPONSE_BATCH,
     RESPONSE_LIST,
 };
-use rustls::pki_types::{ CertificateDer, ServerName };
+use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use rustls::client::Resumption;
 use tokio_rustls::TlsConnector;
@@ -50,7 +50,7 @@ struct ListedImage {
 struct ClientArgs {
     addr: String,
     server_name: String,
-    cert_path: PathBuf,
+    cert_path: Option<PathBuf>,
     receive_dir: PathBuf,
     batch: bool,
     verbose: bool,
@@ -69,7 +69,7 @@ fn parse_args() -> ClientArgs {
 
     let mut addr = String::from("127.0.0.1:8443"); // JTP always on 8443
     let mut server_name = String::from("localhost");
-    let mut cert_path = PathBuf::from("cert.pem");
+    let mut cert_path: Option<PathBuf> = None;
     let mut receive_dir = PathBuf::from("output");
     let mut batch = false;
     let mut verbose = false;
@@ -98,7 +98,7 @@ fn parse_args() -> ClientArgs {
             }
             "--cert" => {
                 if let Some(v) = args.next() {
-                    cert_path = PathBuf::from(v);
+                    cert_path = Some(PathBuf::from(v));
                 }
             }
             "--out" | "--output" => {
@@ -150,7 +150,7 @@ Options:\n  \
   --tls, --secure     Use TLS encryption (default port: 8443)\n  \
   --no-tls, --plain   Use plain TCP (default)\n  \
   --server-name NAME  TLS SNI name (default: localhost)\n  \
-  --cert PATH         Path to server certificate for TLS (default: cert.pem)\n  \
+  --cert PATH         Path to custom CA cert (default: system roots)\n  \
   --out DIR           Output directory (default: output)\n  \
   --batch             Delta sync: download missing images only\n  \
   --repeat N          Download images N times (default: 1)\n  \
@@ -288,20 +288,28 @@ impl TlsConnectionPool {
     async fn new(
         addr: String,
         server_name: String,
-        cert_path: &Path,
+        cert_path: Option<&Path>,
         tcp_nodelay: bool,
         verbose: bool
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        vlog!(verbose, "Loading trusted certs from {}...", cert_path.display());
-        let cert_bytes = tokio::fs::read(cert_path).await?;
-        let certs: Vec<CertificateDer<'static>> = {
-            let mut reader = BufReader::new(std::io::Cursor::new(cert_bytes));
-            rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?
+        let root_store = if let Some(path) = cert_path {
+            vlog!(verbose, "Loading trusted certs from {}...", path.display());
+            let cert_bytes = tokio::fs::read(path).await?;
+            let certs: Vec<rustls::pki_types::CertificateDer<'static>> = {
+                let mut reader = BufReader::new(std::io::Cursor::new(cert_bytes));
+                rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?
+            };
+            let mut store = RootCertStore::empty();
+            for cert in certs {
+                store.add(cert)?;
+            }
+            store
+        } else {
+            vlog!(verbose, "Using system root certificates...");
+            let mut store = RootCertStore::empty();
+            store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            store
         };
-        let mut root_store = RootCertStore::empty();
-        for cert in certs {
-            root_store.add(cert)?;
-        }
 
         let mut client_config = rustls::ClientConfig
             ::builder()
@@ -377,7 +385,7 @@ async fn plain_connect(
 async fn tls_connect(
     addr: &str,
     server_name: &str,
-    cert_path: &Path,
+    cert_path: Option<&Path>,
     tcp_nodelay: bool,
     verbose: bool
 ) -> Result<TlsStream<TcpStream>, Box<dyn std::error::Error + Send + Sync>> {
@@ -388,16 +396,24 @@ async fn tls_connect(
         tcp.set_nodelay(true)?;
     }
 
-    vlog!(verbose, "Loading trusted certs from {}...", cert_path.display());
-    let cert_bytes = tokio::fs::read(cert_path).await?;
-    let certs: Vec<CertificateDer<'static>> = {
-        let mut reader = BufReader::new(std::io::Cursor::new(cert_bytes));
-        rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?
+    let root_store = if let Some(path) = cert_path {
+        vlog!(verbose, "Loading trusted certs from {}...", path.display());
+        let cert_bytes = tokio::fs::read(path).await?;
+        let certs: Vec<rustls::pki_types::CertificateDer<'static>> = {
+            let mut reader = BufReader::new(std::io::Cursor::new(cert_bytes));
+            rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?
+        };
+        let mut store = RootCertStore::empty();
+        for cert in certs {
+            store.add(cert)?;
+        }
+        store
+    } else {
+        vlog!(verbose, "Using system root certificates...");
+        let mut store = RootCertStore::empty();
+        store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        store
     };
-    let mut root_store = RootCertStore::empty();
-    for cert in certs {
-        root_store.add(cert)?;
-    }
 
     let mut client_config = rustls::ClientConfig
         ::builder()
@@ -549,7 +565,7 @@ async fn parallel_download_worker(
     worker_id: usize,
     addr: String,
     server_name: String,
-    cert_path: PathBuf,
+    cert_path: Option<PathBuf>,
     ids: Vec<ImageId>,
     receive_dir: PathBuf,
     by_id: Arc<HashMap<ImageId, ListedImage>>,
@@ -564,7 +580,7 @@ async fn parallel_download_worker(
     let mut pool = TlsConnectionPool::new(
         addr,
         server_name,
-        &cert_path,
+        cert_path.as_deref(),
         tcp_nodelay,
         verbose
     ).await?;
@@ -582,10 +598,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     vlog!(
         verbose,
-        "Client args: addr={}, server_name={}, cert={}, out={}, parallel={}, keep_alive={}",
+        "Client args: addr={}, server_name={}, cert={:?}, out={}, parallel={}, keep_alive={}",
         args.addr,
         args.server_name,
-        args.cert_path.display(),
+        args.cert_path,
         args.receive_dir.display(),
         args.parallel,
         args.keep_alive
@@ -601,7 +617,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tls_list_stream = tls_connect(
             &args.addr,
             &args.server_name,
-            &args.cert_path,
+            args.cert_path.as_deref(),
             args.tcp_nodelay,
             verbose
         ).await?;
@@ -642,7 +658,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tls_stream = tls_connect(
             &args.addr,
             &args.server_name,
-            &args.cert_path,
+            args.cert_path.as_deref(),
             args.tcp_nodelay,
             verbose
         ).await?;
@@ -675,7 +691,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tls_list_stream = tls_connect(
         &args.addr,
         &args.server_name,
-        &args.cert_path,
+        args.cert_path.as_deref(),
         args.tcp_nodelay,
         verbose
     ).await?;
@@ -805,7 +821,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut pool = TlsConnectionPool::new(
                 args.addr.clone(),
                 args.server_name.clone(),
-                &args.cert_path,
+                args.cert_path.as_deref(),
                 args.tcp_nodelay,
                 verbose
             ).await?;
@@ -822,7 +838,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let tls_stream = tls_connect(
                 &args.addr,
                 &args.server_name,
-                &args.cert_path,
+                args.cert_path.as_deref(),
                 args.tcp_nodelay,
                 verbose
             ).await?;
