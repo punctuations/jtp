@@ -40,12 +40,10 @@ macro_rules! vlog {
     };
 }
 
-async fn load_or_generate_tls_material() -> tokio::io::Result<
-    (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)
-> {
-    let cert_path = Path::new("cert.pem");
-    let key_path = Path::new("key.pem");
-
+async fn load_or_generate_tls_material(
+    cert_path: &Path,
+    key_path: &Path
+) -> tokio::io::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     if !cert_path.exists() || !key_path.exists() {
         let certified = rcgen
             ::generate_simple_self_signed(vec!["localhost".to_string()])
@@ -88,6 +86,8 @@ async fn load_or_generate_tls_material() -> tokio::io::Result<
 struct ServerArgs {
     bind: String,
     images_dir: PathBuf,
+    cert_path: PathBuf,
+    key_path: PathBuf,
     only_name_contains: Option<String>,
     compression_threshold: f32,
     verbose: bool,
@@ -99,6 +99,8 @@ struct ServerArgs {
 fn parse_args() -> ServerArgs {
     let mut bind = String::from("0.0.0.0:8443");
     let mut images_dir = PathBuf::from("images");
+    let mut cert_path = PathBuf::from("cert.pem");
+    let mut key_path = PathBuf::from("key.pem");
     let mut only_name_contains: Option<String> = None;
     let mut compression_threshold = jtp::protocol::DEFAULT_MIN_COMPRESSION_RATIO;
     let mut verbose = false;
@@ -117,6 +119,16 @@ fn parse_args() -> ServerArgs {
             "--images" | "--images-dir" => {
                 if let Some(v) = args.next() {
                     images_dir = PathBuf::from(v);
+                }
+            }
+            "--cert" => {
+                if let Some(v) = args.next() {
+                    cert_path = PathBuf::from(v);
+                }
+            }
+            "--key" => {
+                if let Some(v) = args.next() {
+                    key_path = PathBuf::from(v);
                 }
             }
             "--only" | "--name-contains" => {
@@ -153,6 +165,8 @@ fn parse_args() -> ServerArgs {
 Options:\n  \
   --bind ADDR               Bind address (default: 0.0.0.0:8443)\n  \
   --images DIR              Images directory to scan (default: images)\n  \
+  --cert PATH               Path to TLS certificate (default: cert.pem)\n  \
+  --key PATH                Path to TLS private key (default: key.pem)\n  \
   --only SUBSTRING          Only serve files whose basename contains SUBSTRING\n  \
   --compression-threshold   Min ratio to use compression (default: 0.95)\n  \
   --keep-alive-timeout SEC  Keep-alive idle timeout in seconds (default: 30)\n  \
@@ -166,7 +180,18 @@ Options:\n  \
         }
     }
 
-    ServerArgs { bind, images_dir, only_name_contains, compression_threshold, verbose, keep_alive_timeout, tcp_nodelay, no_tls }
+    ServerArgs {
+        bind,
+        images_dir,
+        cert_path,
+        key_path,
+        only_name_contains,
+        compression_threshold,
+        verbose,
+        keep_alive_timeout,
+        tcp_nodelay,
+        no_tls,
+    }
 }
 
 // Generic request handler that works with any AsyncRead + AsyncWrite stream
@@ -175,9 +200,9 @@ async fn handle_requests<S>(
     catalog: Arc<ImageCatalog>,
     compression_threshold: f32,
     keep_alive_timeout: Duration,
-    verbose: bool,
-) where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    verbose: bool
+)
+    where S: AsyncReadExt + AsyncWriteExt + Unpin
 {
     let mut request_count = 0u64;
     loop {
@@ -217,13 +242,26 @@ async fn handle_requests<S>(
         let keep_alive = (request_flags & REQUEST_FLAG_KEEP_ALIVE) != 0;
 
         match request_type {
-            REQUEST_LIST => vlog!(verbose, "Request #{}: LIST (keep-alive={})", request_count, keep_alive),
-            REQUEST_GET_BY_ID => vlog!(verbose, "Request #{}: GET_BY_ID (keep-alive={})", request_count, keep_alive),
-            REQUEST_BATCH => vlog!(verbose, "Request #{}: BATCH (keep-alive={})", request_count, keep_alive),
-            REQUEST_LIST_AND_GET => vlog!(verbose, "Request #{}: LIST_AND_GET (keep-alive={})", request_count, keep_alive),
+            REQUEST_LIST =>
+                vlog!(verbose, "Request #{}: LIST (keep-alive={})", request_count, keep_alive),
+            REQUEST_GET_BY_ID =>
+                vlog!(verbose, "Request #{}: GET_BY_ID (keep-alive={})", request_count, keep_alive),
+            REQUEST_BATCH =>
+                vlog!(verbose, "Request #{}: BATCH (keep-alive={})", request_count, keep_alive),
+            REQUEST_LIST_AND_GET =>
+                vlog!(
+                    verbose,
+                    "Request #{}: LIST_AND_GET (keep-alive={})",
+                    request_count,
+                    keep_alive
+                ),
             other => {
                 vlog!(verbose, "Unknown request type: {}", other);
-                let _ = send_error(&mut stream, ErrorCode::InvalidRequest, "unknown request type").await;
+                let _ = send_error(
+                    &mut stream,
+                    ErrorCode::InvalidRequest,
+                    "unknown request type"
+                ).await;
                 let _ = stream.flush().await;
                 return;
             }
@@ -247,12 +285,14 @@ async fn handle_requests<S>(
             // Send all images directly (no separate catalog - IDs come with each image)
             for id in sorted.iter().take(count as usize) {
                 if let Some(metadata) = catalog.images.get(id) {
-                    if let Err(e) = send_image_with_options(
-                        &mut stream,
-                        metadata,
-                        compression_threshold,
-                        verbose
-                    ).await {
+                    if
+                        let Err(e) = send_image_with_options(
+                            &mut stream,
+                            metadata,
+                            compression_threshold,
+                            verbose
+                        ).await
+                    {
                         vlog!(verbose, "Failed to send image: {}", e);
                         return;
                     }
@@ -301,7 +341,11 @@ async fn handle_requests<S>(
 
             if have_count > 1_000_000 {
                 vlog!(verbose, "BATCH have_count too large: {}", have_count);
-                let _ = send_error(&mut stream, ErrorCode::InvalidRequest, "have_count too large").await;
+                let _ = send_error(
+                    &mut stream,
+                    ErrorCode::InvalidRequest,
+                    "have_count too large"
+                ).await;
                 let _ = stream.flush().await;
                 return;
             }
@@ -335,12 +379,14 @@ async fn handle_requests<S>(
             }
 
             for metadata in missing.into_iter().take(missing_count_u32 as usize) {
-                if let Err(e) = send_image_with_options(
-                    &mut stream,
-                    metadata,
-                    compression_threshold,
-                    verbose
-                ).await {
+                if
+                    let Err(e) = send_image_with_options(
+                        &mut stream,
+                        metadata,
+                        compression_threshold,
+                        verbose
+                    ).await
+                {
                     vlog!(verbose, "Failed to send image: {}", e);
                     return;
                 }
@@ -372,12 +418,14 @@ async fn handle_requests<S>(
         for id in ids {
             vlog!(verbose, "Requested id={}", hex::encode(id.to_be_bytes()));
             if let Some(metadata) = catalog.get_metadata(&id) {
-                if let Err(e) = send_image_with_options(
-                    &mut stream,
-                    metadata,
-                    compression_threshold,
-                    verbose
-                ).await {
+                if
+                    let Err(e) = send_image_with_options(
+                        &mut stream,
+                        metadata,
+                        compression_threshold,
+                        verbose
+                    ).await
+                {
                     vlog!(verbose, "Failed to send image: {}", e);
                     return;
                 }
@@ -452,12 +500,18 @@ async fn main() -> tokio::io::Result<()> {
 
             tokio::spawn(async move {
                 let stream = BufWriter::with_capacity(64 * 1024, socket);
-                handle_requests(stream, catalog, compression_threshold, keep_alive_timeout, verbose).await;
+                handle_requests(
+                    stream,
+                    catalog,
+                    compression_threshold,
+                    keep_alive_timeout,
+                    verbose
+                ).await;
             });
         }
     } else {
         // TLS mode (default)
-        let (certs, key) = load_or_generate_tls_material().await?;
+        let (certs, key) = load_or_generate_tls_material(&args.cert_path, &args.key_path).await?;
 
         let mut config = ServerConfig::builder()
             .with_no_client_auth()
@@ -499,7 +553,13 @@ async fn main() -> tokio::io::Result<()> {
                 vlog!(verbose, "TLS handshake complete");
 
                 let stream = BufWriter::with_capacity(64 * 1024, tls_stream);
-                handle_requests(stream, catalog, compression_threshold, keep_alive_timeout, verbose).await;
+                handle_requests(
+                    stream,
+                    catalog,
+                    compression_threshold,
+                    keep_alive_timeout,
+                    verbose
+                ).await;
             });
         }
     }
