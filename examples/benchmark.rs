@@ -13,27 +13,20 @@ use std::collections::HashSet;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{ Duration, Instant };
+use std::time::{Duration, Instant};
 
 use colored::Colorize;
-use tokio::io::{ AsyncReadExt, AsyncWriteExt, BufWriter };
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 
 use jtp::protocol::{
-    read_varint_u32,
-    write_batch_request_buffered,
-    write_get_request_buffered,
-    write_list_request_buffered,
-    write_list_and_get_request_buffered,
-    ImageId,
-    REQUEST_FLAG_KEEP_ALIVE,
-    RESPONSE_BATCH,
-    RESPONSE_LIST,
-    RESPONSE_LIST_AND_GET,
+    read_varint_u32, write_batch_request_buffered, write_get_request_buffered,
+    write_list_and_get_request_buffered, write_list_request_buffered, ImageId,
+    REQUEST_FLAG_KEEP_ALIVE, RESPONSE_BATCH, RESPONSE_LIST, RESPONSE_LIST_AND_GET,
 };
 use rustls::client::Resumption;
-use rustls::pki_types::{ CertificateDer, ServerName };
+use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::RootCertStore;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
@@ -59,11 +52,11 @@ struct BenchmarkConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum BenchmarkMode {
     Http,
-    JtpPerImage, // New connection per image (worst case)
-    JtpBatch, // Single connection, batch request
-    JtpKeepAlive, // Reuse connection with keep-alive flag
-    JtpParallel, // Multiple parallel workers
-    JtpDelta, // BATCH/delta sync mode
+    JtpPerImage,   // New connection per image (worst case)
+    JtpBatch,      // Single connection, batch request
+    JtpKeepAlive,  // Reuse connection with keep-alive flag
+    JtpParallel,   // Multiple parallel workers
+    JtpDelta,      // BATCH/delta sync mode
     JtpListAndGet, // Combined LIST+GET in single round-trip (fastest)
 }
 
@@ -109,9 +102,9 @@ impl Default for BenchmarkConfig {
                 BenchmarkMode::JtpBatch,
                 BenchmarkMode::JtpKeepAlive,
                 BenchmarkMode::JtpParallel,
-                BenchmarkMode::JtpListAndGet
+                BenchmarkMode::JtpListAndGet,
             ],
-            no_tls: true,   // Plain TCP by default for JTP
+            no_tls: true,    // Plain TCP by default for JTP
             http_tls: false, // Plain HTTP by default
         }
     }
@@ -132,10 +125,7 @@ struct Stats {
 
 impl Stats {
     fn from_durations(durations: &[Duration]) -> Self {
-        let values: Vec<f64> = durations
-            .iter()
-            .map(|d| d.as_secs_f64() * 1000.0)
-            .collect();
+        let values: Vec<f64> = durations.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
         Self::from_values(&values)
     }
 
@@ -160,10 +150,7 @@ impl Stats {
         let max = sorted[sorted.len() - 1];
 
         let variance: f64 =
-            values
-                .iter()
-                .map(|x| (x - mean).powi(2))
-                .sum::<f64>() / (values.len() as f64);
+            values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (values.len() as f64);
         let std_dev = variance.sqrt();
 
         Self {
@@ -236,7 +223,7 @@ impl PlainJtpClient {
     }
 
     async fn list_images(
-        &self
+        &self,
     ) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -272,14 +259,19 @@ impl PlainJtpClient {
             writer.get_mut().read_exact(&mut name_bytes).await?;
             let filename = String::from_utf8_lossy(&name_bytes).to_string();
             let size = read_varint_u32(writer.get_mut()).await?;
-            images.push(ListedImage { id, flags, filename, size });
+            images.push(ListedImage {
+                id,
+                flags,
+                filename,
+                size,
+            });
         }
 
         Ok(images)
     }
 
     async fn consume_image(
-        stream: &mut TcpStream
+        stream: &mut TcpStream,
     ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
         let _flags = stream.read_u8().await?;
         let length = read_varint_u32(stream).await?;
@@ -298,7 +290,7 @@ impl PlainJtpClient {
 
     async fn download_per_image(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let mut total_bytes = 0u64;
         let connections = ids.len();
@@ -318,7 +310,7 @@ impl PlainJtpClient {
 
     async fn download_batch(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -346,7 +338,7 @@ impl PlainJtpClient {
 
     async fn download_keepalive(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -367,7 +359,7 @@ impl PlainJtpClient {
     async fn download_parallel(
         &self,
         ids: &[ImageId],
-        num_workers: usize
+        num_workers: usize,
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let chunk_size = (ids.len() + num_workers - 1) / num_workers;
         let semaphore = Arc::new(Semaphore::new(num_workers));
@@ -380,31 +372,26 @@ impl PlainJtpClient {
             let semaphore = Arc::clone(&semaphore);
             let addr = addr.clone();
 
-            handles.push(
-                tokio::spawn(async move {
-                    let _permit = semaphore.acquire().await.unwrap();
+            handles.push(tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap();
 
-                    let tcp = TcpStream::connect(&addr).await?;
-                    tcp.set_nodelay(true)?;
-                    let mut writer = BufWriter::with_capacity(64 * 1024, tcp);
-                    let mut bytes = 0u64;
+                let tcp = TcpStream::connect(&addr).await?;
+                tcp.set_nodelay(true)?;
+                let mut writer = BufWriter::with_capacity(64 * 1024, tcp);
+                let mut bytes = 0u64;
 
-                    for sub_chunk in chunk.chunks(255) {
-                        write_get_request_buffered(
-                            &mut writer,
-                            REQUEST_FLAG_KEEP_ALIVE,
-                            sub_chunk
-                        ).await?;
-                        writer.flush().await?;
+                for sub_chunk in chunk.chunks(255) {
+                    write_get_request_buffered(&mut writer, REQUEST_FLAG_KEEP_ALIVE, sub_chunk)
+                        .await?;
+                    writer.flush().await?;
 
-                        for _ in sub_chunk {
-                            bytes += Self::consume_image(writer.get_mut()).await?;
-                        }
+                    for _ in sub_chunk {
+                        bytes += Self::consume_image(writer.get_mut()).await?;
                     }
+                }
 
-                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
-                })
-            );
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
+            }));
         }
 
         let mut total_bytes = 0u64;
@@ -417,7 +404,7 @@ impl PlainJtpClient {
 
     async fn download_delta(
         &self,
-        have_ids: &[ImageId]
+        have_ids: &[ImageId],
     ) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -442,7 +429,7 @@ impl PlainJtpClient {
     }
 
     async fn download_list_and_get(
-        &self
+        &self,
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -486,7 +473,7 @@ impl JtpClientWrapper {
 
     async fn new_tls(
         addr: &str,
-        cert_path: &str
+        cert_path: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let client = JtpClient::new(addr, cert_path).await?;
         Ok(Self::Tls(client))
@@ -495,7 +482,7 @@ impl JtpClientWrapper {
     /// Auto-detect whether server is running in TLS or plain TCP mode
     async fn auto_detect(
         addr: &str,
-        cert_path: &str
+        cert_path: &str,
     ) -> Result<(Self, bool), Box<dyn std::error::Error + Send + Sync>> {
         // Try plain TCP first - send LIST request and check response
         let tcp = TcpStream::connect(addr).await?;
@@ -526,16 +513,15 @@ impl JtpClientWrapper {
         }
 
         // Unknown response
-        Err(
-            format!(
-                "Unknown server response: {:02x?}. Expected JTP (JTPL) or TLS handshake.",
-                header
-            ).into()
+        Err(format!(
+            "Unknown server response: {:02x?}. Expected JTP (JTPL) or TLS handshake.",
+            header
         )
+        .into())
     }
 
     async fn list_images(
-        &self
+        &self,
     ) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Plain(c) => c.list_images().await,
@@ -545,7 +531,7 @@ impl JtpClientWrapper {
 
     async fn download_per_image(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Plain(c) => c.download_per_image(ids).await,
@@ -555,7 +541,7 @@ impl JtpClientWrapper {
 
     async fn download_batch(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Plain(c) => c.download_batch(ids).await,
@@ -565,7 +551,7 @@ impl JtpClientWrapper {
 
     async fn download_keepalive(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Plain(c) => c.download_keepalive(ids).await,
@@ -576,7 +562,7 @@ impl JtpClientWrapper {
     async fn download_parallel(
         &self,
         ids: &[ImageId],
-        num_workers: usize
+        num_workers: usize,
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Plain(c) => c.download_parallel(ids, num_workers).await,
@@ -586,7 +572,7 @@ impl JtpClientWrapper {
 
     async fn download_delta(
         &self,
-        have_ids: &[ImageId]
+        have_ids: &[ImageId],
     ) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Plain(c) => c.download_delta(have_ids).await,
@@ -595,7 +581,7 @@ impl JtpClientWrapper {
     }
 
     async fn download_list_and_get(
-        &self
+        &self,
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Plain(c) => c.download_list_and_get().await,
@@ -614,7 +600,7 @@ struct JtpClient {
 impl JtpClient {
     async fn new(
         addr: &str,
-        cert_path: &str
+        cert_path: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let cert_bytes = tokio::fs::read(cert_path).await?;
         let certs: Vec<CertificateDer<'static>> = {
@@ -627,14 +613,12 @@ impl JtpClient {
             root_store.add(cert)?;
         }
 
-        let mut config = rustls::ClientConfig
-            ::builder()
+        let mut config = rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
 
-        config.resumption = Resumption::default().tls12_resumption(
-            rustls::client::Tls12Resumption::SessionIdOrTickets
-        );
+        config.resumption = Resumption::default()
+            .tls12_resumption(rustls::client::Tls12Resumption::SessionIdOrTickets);
 
         let connector = TlsConnector::from(Arc::new(config));
         let server_name = ServerName::try_from("localhost".to_string())?;
@@ -647,15 +631,18 @@ impl JtpClient {
     }
 
     async fn connect(
-        &self
+        &self,
     ) -> Result<TlsStream<TcpStream>, Box<dyn std::error::Error + Send + Sync>> {
         let tcp = TcpStream::connect(&self.addr).await?;
         tcp.set_nodelay(true)?;
-        Ok(self.connector.connect(self.server_name.clone(), tcp).await?)
+        Ok(self
+            .connector
+            .connect(self.server_name.clone(), tcp)
+            .await?)
     }
 
     async fn list_images(
-        &self
+        &self,
     ) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -693,7 +680,7 @@ impl JtpClient {
 
     /// Read and discard image data from stream, return bytes read
     async fn consume_image(
-        stream: &mut TlsStream<TcpStream>
+        stream: &mut TlsStream<TcpStream>,
     ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
         let _flags = stream.read_u8().await?;
         let length = read_varint_u32(stream).await?;
@@ -713,7 +700,7 @@ impl JtpClient {
     /// Download one image per connection (worst case scenario)
     async fn download_per_image(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let mut total_bytes = 0u64;
         let connections = ids.len();
@@ -734,7 +721,7 @@ impl JtpClient {
     /// Download all images in a single batch request (no keep-alive)
     async fn download_batch(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -764,7 +751,7 @@ impl JtpClient {
     /// Download with keep-alive - single connection reused
     async fn download_keepalive(
         &self,
-        ids: &[ImageId]
+        ids: &[ImageId],
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -786,7 +773,7 @@ impl JtpClient {
     async fn download_parallel(
         &self,
         ids: &[ImageId],
-        num_workers: usize
+        num_workers: usize,
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let chunk_size = (ids.len() + num_workers - 1) / num_workers;
         let semaphore = Arc::new(Semaphore::new(num_workers));
@@ -803,32 +790,27 @@ impl JtpClient {
             let connector = connector.clone();
             let server_name = server_name.clone();
 
-            handles.push(
-                tokio::spawn(async move {
-                    let _permit = semaphore.acquire().await.unwrap();
+            handles.push(tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap();
 
-                    let tcp = TcpStream::connect(&addr).await?;
-                    tcp.set_nodelay(true)?;
-                    let stream = connector.connect(server_name, tcp).await?;
-                    let mut writer = BufWriter::with_capacity(64 * 1024, stream);
-                    let mut bytes = 0u64;
+                let tcp = TcpStream::connect(&addr).await?;
+                tcp.set_nodelay(true)?;
+                let stream = connector.connect(server_name, tcp).await?;
+                let mut writer = BufWriter::with_capacity(64 * 1024, stream);
+                let mut bytes = 0u64;
 
-                    for sub_chunk in chunk.chunks(255) {
-                        write_get_request_buffered(
-                            &mut writer,
-                            REQUEST_FLAG_KEEP_ALIVE,
-                            sub_chunk
-                        ).await?;
-                        writer.flush().await?;
+                for sub_chunk in chunk.chunks(255) {
+                    write_get_request_buffered(&mut writer, REQUEST_FLAG_KEEP_ALIVE, sub_chunk)
+                        .await?;
+                    writer.flush().await?;
 
-                        for _ in sub_chunk {
-                            bytes += Self::consume_image(writer.get_mut()).await?;
-                        }
+                    for _ in sub_chunk {
+                        bytes += Self::consume_image(writer.get_mut()).await?;
                     }
+                }
 
-                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
-                })
-            );
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
+            }));
         }
 
         let mut total_bytes = 0u64;
@@ -842,7 +824,7 @@ impl JtpClient {
     /// Delta sync - send "have" IDs, receive only missing
     async fn download_delta(
         &self,
-        have_ids: &[ImageId]
+        have_ids: &[ImageId],
     ) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -869,7 +851,7 @@ impl JtpClient {
     /// Combined LIST + GET in single round-trip (fastest mode)
     /// Server sends catalog header followed by all image data
     async fn download_list_and_get(
-        &self
+        &self,
     ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
         let mut writer = BufWriter::with_capacity(64 * 1024, stream);
@@ -905,7 +887,7 @@ impl JtpClient {
 async fn download_http(
     client: &reqwest::Client,
     base_url: &str,
-    filenames: &[String]
+    filenames: &[String],
 ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
     let mut total_bytes = 0u64;
 
@@ -945,7 +927,14 @@ fn print_info(msg: &str) {
 }
 
 fn print_run(run: usize, total: usize, duration_ms: f64) {
-    println!("  {} {}/{}... {} {:.2} ms", "Run".yellow(), run, total, "OK".green(), duration_ms);
+    println!(
+        "  {} {}/{}... {} {:.2} ms",
+        "Run".yellow(),
+        run,
+        total,
+        "OK".green(),
+        duration_ms
+    );
 }
 
 // ============================================================================
@@ -1016,14 +1005,13 @@ fn parse_args() -> BenchmarkConfig {
                         "parallel" => vec![BenchmarkMode::JtpParallel],
                         "delta" => vec![BenchmarkMode::JtpDelta],
                         "list-and-get" | "lag" | "combined" => vec![BenchmarkMode::JtpListAndGet],
-                        "jtp" =>
-                            vec![
-                                BenchmarkMode::JtpPerImage,
-                                BenchmarkMode::JtpBatch,
-                                BenchmarkMode::JtpKeepAlive,
-                                BenchmarkMode::JtpParallel,
-                                BenchmarkMode::JtpListAndGet
-                            ],
+                        "jtp" => vec![
+                            BenchmarkMode::JtpPerImage,
+                            BenchmarkMode::JtpBatch,
+                            BenchmarkMode::JtpKeepAlive,
+                            BenchmarkMode::JtpParallel,
+                            BenchmarkMode::JtpListAndGet,
+                        ],
                         _ => config.modes,
                     };
                 }
@@ -1080,31 +1068,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Print setup info
     println!();
-    print_info(&format!("Test images directory: {:?}", config.test_images_dir));
+    print_info(&format!(
+        "Test images directory: {:?}",
+        config.test_images_dir
+    ));
     print_info(&format!("HTTP server: {}", config.http_addr));
     print_info(&format!("JTP server: {}", config.jtp_addr));
-    print_info(
-        &format!(
-            "Benchmark modes: {:?}",
-            config.modes
-                .iter()
-                .map(|m| m.short_name())
-                .collect::<Vec<_>>()
-        )
-    );
+    print_info(&format!(
+        "Benchmark modes: {:?}",
+        config
+            .modes
+            .iter()
+            .map(|m| m.short_name())
+            .collect::<Vec<_>>()
+    ));
     print_info(&format!("Warmup runs: {}", config.warmup_iterations));
     print_info(&format!("Benchmark runs: {}", config.test_iterations));
     print_info(&format!("Parallel workers: {}", config.parallel_workers));
 
     // Get test images from directory
-    let image_files: Vec<String> = std::fs
-        ::read_dir(&config.test_images_dir)?
+    let image_files: Vec<String> = std::fs::read_dir(&config.test_images_dir)?
         .filter_map(|e| e.ok())
         .filter(|e| {
             let path = e.path();
             if let Some(ext) = path.extension() {
                 let ext = ext.to_string_lossy().to_lowercase();
-                matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp")
+                matches!(
+                    ext.as_str(),
+                    "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+                )
             } else {
                 false
             }
@@ -1113,7 +1105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .collect();
 
     if image_files.is_empty() {
-        eprintln!("{} No test images found in {:?}", "Error:".red().bold(), config.test_images_dir);
+        eprintln!(
+            "{} No test images found in {:?}",
+            "Error:".red().bold(),
+            config.test_images_dir
+        );
         return Ok(());
     }
 
@@ -1122,10 +1118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .iter()
         .filter_map(|f| {
             let path = config.test_images_dir.join(f);
-            std::fs
-                ::metadata(&path)
-                .ok()
-                .map(|m| m.len())
+            std::fs::metadata(&path).ok().map(|m| m.len())
         })
         .sum();
 
@@ -1169,7 +1162,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .await
                 .is_ok()
             {
-                let proto = if addr.starts_with("https://") { "HTTPS" } else { "HTTP" };
+                let proto = if addr.starts_with("https://") {
+                    "HTTPS"
+                } else {
+                    "HTTP"
+                };
                 if addr == &config.http_addr {
                     print_success(&format!("{} server is running at {}", proto, addr));
                 } else {
@@ -1182,10 +1179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
 
         if !found {
-            eprintln!(
-                "{} No HTTP server found. Tried:",
-                "Error:".red().bold()
-            );
+            eprintln!("{} No HTTP server found. Tried:", "Error:".red().bold());
             for addr in &addrs_to_try {
                 eprintln!("    - {}", addr);
             }
@@ -1199,25 +1193,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Check JTP server if needed (auto-detect TLS vs plain TCP)
     let jtp_client: Option<JtpClientWrapper> = if has_jtp_mode {
         match JtpClientWrapper::auto_detect(&config.jtp_addr, &config.cert_path).await {
-            Ok((client, is_tls)) => {
-                match client.list_images().await {
-                    Ok(images) => {
-                        let mode_str = if is_tls { "TLS" } else { "plain TCP" };
-                        print_success(
-                            &format!(
-                                "JTP server auto-detected ({} images, {})",
-                                images.len(),
-                                mode_str
-                            )
-                        );
-                        Some(client)
-                    }
-                    Err(e) => {
-                        eprintln!("{} JTP server error: {}", "Error:".red().bold(), e);
-                        return Ok(());
-                    }
+            Ok((client, is_tls)) => match client.list_images().await {
+                Ok(images) => {
+                    let mode_str = if is_tls { "TLS" } else { "plain TCP" };
+                    print_success(&format!(
+                        "JTP server auto-detected ({} images, {})",
+                        images.len(),
+                        mode_str
+                    ));
+                    Some(client)
                 }
-            }
+                Err(e) => {
+                    eprintln!("{} JTP server error: {}", "Error:".red().bold(), e);
+                    return Ok(());
+                }
+            },
             Err(e) => {
                 eprintln!(
                     "{} Cannot connect to JTP server at {}: {}",
@@ -1226,7 +1216,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     e
                 );
                 eprintln!();
-                eprintln!("  Start with TLS:   cargo run --release --bin server -- --images images/");
+                eprintln!(
+                    "  Start with TLS:   cargo run --release --bin server -- --images images/"
+                );
                 eprintln!("  Start plain TCP:  cargo run --release --bin server -- --no-tls --images images/");
                 return Ok(());
             }
@@ -1241,22 +1233,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         vec![]
     };
-    let jtp_ids: Vec<ImageId> = jtp_images
-        .iter()
-        .map(|i| i.id)
-        .collect();
+    let jtp_ids: Vec<ImageId> = jtp_images.iter().map(|i| i.id).collect();
 
     // For delta mode: simulate having half the images already
-    let have_ids: Vec<ImageId> = jtp_ids
-        .iter()
-        .take(jtp_ids.len() / 2)
-        .copied()
-        .collect();
+    let have_ids: Vec<ImageId> = jtp_ids.iter().take(jtp_ids.len() / 2).copied().collect();
     let have_set: HashSet<ImageId> = have_ids.iter().copied().collect();
-    let missing_count = jtp_ids
-        .iter()
-        .filter(|id| !have_set.contains(id))
-        .count();
+    let missing_count = jtp_ids.iter().filter(|id| !have_set.contains(id)).count();
 
     let mut results: Vec<BenchmarkResult> = Vec::new();
 
@@ -1288,7 +1270,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
                 BenchmarkMode::JtpParallel => {
                     if let Some(ref client) = jtp_client {
-                        let _ = client.download_parallel(&jtp_ids, config.parallel_workers).await;
+                        let _ = client
+                            .download_parallel(&jtp_ids, config.parallel_workers)
+                            .await;
                     }
                 }
                 BenchmarkMode::JtpDelta => {
@@ -1340,7 +1324,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
                 BenchmarkMode::JtpParallel => {
                     if let Some(ref client) = jtp_client {
-                        client.download_parallel(&jtp_ids, config.parallel_workers).await?
+                        client
+                            .download_parallel(&jtp_ids, config.parallel_workers)
+                            .await?
                     } else {
                         (0, 0)
                     }
@@ -1372,13 +1358,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         // For delta mode, note how many images were actually transferred
         if *mode == BenchmarkMode::JtpDelta {
-            print_info(
-                &format!(
-                    "Delta sync: had {} images, received {} missing",
-                    have_ids.len(),
-                    missing_count
-                )
-            );
+            print_info(&format!(
+                "Delta sync: had {} images, received {} missing",
+                have_ids.len(),
+                missing_count
+            ));
         }
 
         results.push(BenchmarkResult {
@@ -1401,7 +1385,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("  {} {:.2} ms", "Min time:    ".green(), stats.min);
         println!("  {} {:.2} ms", "Max time:    ".green(), stats.max);
         println!("  {} {:.2} ms", "Std dev:     ".green(), stats.std_dev);
-        println!("  {} {:.2} KB/s", "Throughput:  ".cyan(), result.throughput_kbps());
+        println!(
+            "  {} {:.2} KB/s",
+            "Throughput:  ".cyan(),
+            result.throughput_kbps()
+        );
         println!("  {} {}", "Connections: ".cyan(), result.connections_made);
     }
 
@@ -1412,13 +1400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!();
         println!(
             "  {:12} | {:>10} | {:>8} | {:>9} | {:>9} | {:>10} | {:>5}",
-            "Mode",
-            "Avg Time",
-            "Median",
-            "Min",
-            "Max",
-            "Throughput",
-            "Conns"
+            "Mode", "Avg Time", "Median", "Min", "Max", "Throughput", "Conns"
         );
         println!("  {}", "-".repeat(75));
 
@@ -1448,10 +1430,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Relative performance
         print_subheader("Relative Performance:");
 
-        if
-            let Some(fastest_result) = results
-                .iter()
-                .min_by(|a, b| a.stats().mean.partial_cmp(&b.stats().mean).unwrap())
+        if let Some(fastest_result) = results
+            .iter()
+            .min_by(|a, b| a.stats().mean.partial_cmp(&b.stats().mean).unwrap())
         {
             let fastest_mean = fastest_result.stats().mean;
 
@@ -1477,7 +1458,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
 
         println!();
-        println!("  {} {:.2} KB", "Total data per run:".cyan(), (total_size as f64) / 1024.0);
+        println!(
+            "  {} {:.2} KB",
+            "Total data per run:".cyan(),
+            (total_size as f64) / 1024.0
+        );
     }
 
     println!();

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
-use xxhash_rust::xxh64::xxh64;
-use tokio::io::{ AsyncReadExt, AsyncWriteExt };
-use std::io::{ Read, Write };
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use xxhash_rust::xxh64::xxh64;
 
 pub const BUFFER_SIZE: usize = 65536;
 
@@ -89,7 +89,7 @@ pub fn flags_from_file_type(file_type: u8) -> u8 {
 
 pub async fn write_varint_u32(
     stream: &mut (impl AsyncWriteExt + Unpin),
-    mut value: u32
+    mut value: u32,
 ) -> tokio::io::Result<()> {
     // Fast path for common small values (0-127)
     if value < 0x80 {
@@ -129,7 +129,10 @@ pub async fn read_varint_u32(stream: &mut (impl AsyncReadExt + Unpin)) -> tokio:
         }
     }
 
-    Err(tokio::io::Error::new(tokio::io::ErrorKind::InvalidData, "varint u32 too long"))
+    Err(tokio::io::Error::new(
+        tokio::io::ErrorKind::InvalidData,
+        "varint u32 too long",
+    ))
 }
 
 #[derive(Clone)]
@@ -170,10 +173,7 @@ impl ImageCatalog {
             }
 
             // Only process image files
-            let ext = path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
             let file_type = match ext.to_lowercase().as_str() {
                 "png" => 0,
                 "jpg" | "jpeg" => 1,
@@ -224,10 +224,7 @@ impl ImageCatalog {
         }
 
         // Pre-sort by filename once at catalog creation
-        let mut sorted_ids: Vec<ImageId> = catalog
-            .values()
-            .map(|m| m.id)
-            .collect();
+        let mut sorted_ids: Vec<ImageId> = catalog.values().map(|m| m.id).collect();
         sorted_ids.sort_by(|a, b| {
             let a_name = catalog
                 .get(a)
@@ -269,7 +266,7 @@ impl Default for ImageCatalog {
 
 pub async fn send_catalog(
     stream: &mut (impl AsyncWriteExt + Unpin),
-    catalog: &ImageCatalog
+    catalog: &ImageCatalog,
 ) -> tokio::io::Result<()> {
     let sorted = catalog.sorted_ids();
     let count = sorted.len().min(u16::MAX as usize) as u16;
@@ -286,7 +283,8 @@ pub async fn send_catalog(
             };
             let size_u32 = size.min(u32::MAX as u64) as u32;
 
-            let name_str = metadata.file_name
+            let name_str = metadata
+                .file_name
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("");
@@ -338,7 +336,7 @@ fn get_compression_level(size: usize) -> i32 {
 // Compress data with zstd, return compressed data only if it meets threshold
 pub fn try_compress(
     data: &[u8],
-    min_ratio: f32
+    min_ratio: f32,
 ) -> Result<(Option<Vec<u8>>, CompressionStats), std::io::Error> {
     let level = get_compression_level(data.len());
     let mut encoder = zstd::Encoder::new(Vec::new(), level)?;
@@ -375,7 +373,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
 // Send image over a TCP/TLS stream with optional compression
 pub async fn send_image(
     stream: &mut (impl AsyncWriteExt + Unpin),
-    metadata: &ImageMetadata
+    metadata: &ImageMetadata,
 ) -> tokio::io::Result<()> {
     send_image_with_options(stream, metadata, DEFAULT_MIN_COMPRESSION_RATIO, false).await
 }
@@ -385,7 +383,7 @@ pub async fn send_image_with_options(
     stream: &mut (impl AsyncWriteExt + Unpin),
     metadata: &ImageMetadata,
     min_compression_ratio: f32,
-    verbose: bool
+    verbose: bool,
 ) -> tokio::io::Result<()> {
     // Stream large uncached files to avoid loading them fully into memory.
     if metadata.cached_data.is_none() {
@@ -418,7 +416,8 @@ pub async fn send_image_with_options(
     }
 
     // Cached or small files: use reference to avoid clone
-    let data_arc = metadata.cached_data
+    let data_arc = metadata
+        .cached_data
         .as_ref()
         .expect("cached data should exist for compression path");
 
@@ -472,7 +471,6 @@ pub async fn send_image_with_options(
 
     Ok(())
 }
-
 
 // Validate that reserved flags are not set
 pub fn validate_request_flags(flags: u8) -> Result<(), std::io::Error> {
@@ -591,7 +589,8 @@ pub async fn send_catalog_buffered(
                 }
             };
 
-            let name_str = metadata.file_name
+            let name_str = metadata
+                .file_name
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("");
@@ -645,7 +644,10 @@ pub async fn write_batch_request_buffered(
 
     // Varint for count
     let mut varint_buf = [0u8; 5];
-    let varint_len = encode_varint_to_buf(have_ids.len().min(u32::MAX as usize) as u32, &mut varint_buf);
+    let varint_len = encode_varint_to_buf(
+        have_ids.len().min(u32::MAX as usize) as u32,
+        &mut varint_buf,
+    );
     buf.extend_from_slice(&varint_buf[..varint_len]);
 
     for id in have_ids {

@@ -1,31 +1,22 @@
-use tokio::net::TcpStream;
-use tokio::io::{ AsyncReadExt, AsyncWriteExt, BufWriter };
-use tokio::sync::Semaphore;
 use jtp::protocol::{
-    compute_image_id,
-    file_type_from_flags,
-    read_varint_u32,
-    write_list_request_buffered,
-    write_get_request_buffered,
-    write_batch_request_buffered,
-    FLAG_COMPRESSED,
-    FLAG_ENCRYPTED,
-    ImageId,
-    REQUEST_FLAG_KEEP_ALIVE,
-    RESPONSE_BATCH,
-    RESPONSE_LIST,
+    compute_image_id, file_type_from_flags, read_varint_u32, write_batch_request_buffered,
+    write_get_request_buffered, write_list_request_buffered, ImageId, FLAG_COMPRESSED,
+    FLAG_ENCRYPTED, REQUEST_FLAG_KEEP_ALIVE, RESPONSE_BATCH, RESPONSE_LIST,
 };
+use rustls::client::Resumption;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
-use rustls::client::Resumption;
-use tokio_rustls::TlsConnector;
-use tokio_rustls::client::TlsStream;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::path::Path;
-use std::collections::{ HashMap, HashSet };
 use std::path::PathBuf;
-use std::time::{ Duration, Instant };
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::TlsConnector;
 
 macro_rules! vlog {
     (
@@ -219,7 +210,12 @@ fn collect_have_ids(dir: &Path, verbose: bool) -> std::io::Result<Vec<ImageId>> 
         };
 
         let id = compute_image_id(&bytes);
-        vlog!(verbose, "Have file {} => id={}", path.display(), hex::encode(id.to_be_bytes()));
+        vlog!(
+            verbose,
+            "Have file {} => id={}",
+            path.display(),
+            hex::encode(id.to_be_bytes())
+        );
         have.insert(id);
     }
 
@@ -251,10 +247,18 @@ impl PlainConnectionPool {
     async fn get(&mut self) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
         while let Some((conn, created)) = self.connections.pop() {
             if created.elapsed() < self.max_idle {
-                vlog!(self.verbose, "Reusing pooled connection (age: {:?})", created.elapsed());
+                vlog!(
+                    self.verbose,
+                    "Reusing pooled connection (age: {:?})",
+                    created.elapsed()
+                );
                 return Ok(conn);
             }
-            vlog!(self.verbose, "Discarding stale connection (age: {:?})", created.elapsed());
+            vlog!(
+                self.verbose,
+                "Discarding stale connection (age: {:?})",
+                created.elapsed()
+            );
         }
 
         vlog!(self.verbose, "Creating new connection to {}...", self.addr);
@@ -290,7 +294,7 @@ impl TlsConnectionPool {
         server_name: String,
         cert_path: Option<&Path>,
         tcp_nodelay: bool,
-        verbose: bool
+        verbose: bool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let root_store = if let Some(path) = cert_path {
             vlog!(verbose, "Loading trusted certs from {}...", path.display());
@@ -311,14 +315,12 @@ impl TlsConnectionPool {
             store
         };
 
-        let mut client_config = rustls::ClientConfig
-            ::builder()
+        let mut client_config = rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
 
-        client_config.resumption = Resumption::default().tls12_resumption(
-            rustls::client::Tls12Resumption::SessionIdOrTickets
-        );
+        client_config.resumption = Resumption::default()
+            .tls12_resumption(rustls::client::Tls12Resumption::SessionIdOrTickets);
 
         let connector = TlsConnector::from(Arc::new(client_config));
 
@@ -334,14 +336,22 @@ impl TlsConnectionPool {
     }
 
     async fn get(
-        &mut self
+        &mut self,
     ) -> Result<TlsStream<TcpStream>, Box<dyn std::error::Error + Send + Sync>> {
         while let Some((conn, created)) = self.connections.pop() {
             if created.elapsed() < self.max_idle {
-                vlog!(self.verbose, "Reusing pooled connection (age: {:?})", created.elapsed());
+                vlog!(
+                    self.verbose,
+                    "Reusing pooled connection (age: {:?})",
+                    created.elapsed()
+                );
                 return Ok(conn);
             }
-            vlog!(self.verbose, "Discarding stale connection (age: {:?})", created.elapsed());
+            vlog!(
+                self.verbose,
+                "Discarding stale connection (age: {:?})",
+                created.elapsed()
+            );
         }
 
         vlog!(self.verbose, "Creating new connection to {}...", self.addr);
@@ -369,7 +379,7 @@ impl TlsConnectionPool {
 async fn plain_connect(
     addr: &str,
     tcp_nodelay: bool,
-    verbose: bool
+    verbose: bool,
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     vlog!(verbose, "Connecting TCP to {}...", addr);
     let tcp = TcpStream::connect(addr).await?;
@@ -387,7 +397,7 @@ async fn tls_connect(
     server_name: &str,
     cert_path: Option<&Path>,
     tcp_nodelay: bool,
-    verbose: bool
+    verbose: bool,
 ) -> Result<TlsStream<TcpStream>, Box<dyn std::error::Error + Send + Sync>> {
     vlog!(verbose, "Connecting TCP to {}...", addr);
     let tcp = TcpStream::connect(addr).await?;
@@ -415,15 +425,13 @@ async fn tls_connect(
         store
     };
 
-    let mut client_config = rustls::ClientConfig
-        ::builder()
+    let mut client_config = rustls::ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
     // Enable TLS session resumption
-    client_config.resumption = Resumption::default().tls12_resumption(
-        rustls::client::Tls12Resumption::SessionIdOrTickets
-    );
+    client_config.resumption =
+        Resumption::default().tls12_resumption(rustls::client::Tls12Resumption::SessionIdOrTickets);
 
     let connector = TlsConnector::from(Arc::new(client_config));
 
@@ -436,16 +444,18 @@ async fn receive_image(
     stream: &mut TlsStream<TcpStream>,
     receive_dir: &Path,
     by_id: &HashMap<ImageId, ListedImage>,
-    verbose: bool
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let flags = stream.read_u8().await?;
     let length = read_varint_u32(stream).await?;
     let id = stream.read_u64().await?;
 
     if (flags & FLAG_ENCRYPTED) != 0 {
-        return Err(
-            format!("unsupported image flags=0x{:02x} (encryption not implemented)", flags).into()
-        );
+        return Err(format!(
+            "unsupported image flags=0x{:02x} (encryption not implemented)",
+            flags
+        )
+        .into());
     }
 
     let file_type = file_type_from_flags(flags);
@@ -463,7 +473,12 @@ async fn receive_image(
         let mut buf = vec![0u8; length as usize];
         stream.read_exact(&mut buf).await?;
         let decompressed = jtp::protocol::decompress(&buf)?;
-        vlog!(verbose, "Decompressed {} -> {} bytes", length, decompressed.len());
+        vlog!(
+            verbose,
+            "Decompressed {} -> {} bytes",
+            length,
+            decompressed.len()
+        );
         decompressed
     } else if length > 10_000_000 {
         let temp_path = receive_dir.join(format!("temp_{}.bin", hex::encode(id.to_be_bytes())));
@@ -518,12 +533,16 @@ async fn receive_image(
         None
     };
 
-    let output_name = output_name.unwrap_or_else(|| {
-        format!("output_{}.{}", hex::encode(id.to_be_bytes()), ext)
-    });
+    let output_name =
+        output_name.unwrap_or_else(|| format!("output_{}.{}", hex::encode(id.to_be_bytes()), ext));
 
     let output_path = receive_dir.join(output_name);
-    vlog!(verbose, "Writing {} bytes to {}", data.len(), output_path.display());
+    vlog!(
+        verbose,
+        "Writing {} bytes to {}",
+        data.len(),
+        output_path.display()
+    );
     std::fs::write(output_path, data)?;
 
     Ok(())
@@ -535,7 +554,7 @@ async fn download_batch_keepalive(
     ids: &[ImageId],
     receive_dir: &Path,
     by_id: &HashMap<ImageId, ListedImage>,
-    verbose: bool
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if ids.is_empty() {
         return Ok(());
@@ -546,7 +565,11 @@ async fn download_batch_keepalive(
 
     // Split into chunks of 255 (max for u8 count)
     for chunk in ids.chunks(255) {
-        vlog!(verbose, "Sending GET_BY_ID request ({} ids) with keep-alive", chunk.len());
+        vlog!(
+            verbose,
+            "Sending GET_BY_ID request ({} ids) with keep-alive",
+            chunk.len()
+        );
 
         // Send request with keep-alive flag - single syscall for all header + IDs
         write_get_request_buffered(&mut writer, REQUEST_FLAG_KEEP_ALIVE, chunk).await?;
@@ -573,23 +596,34 @@ async fn parallel_download_worker(
     by_id: Arc<HashMap<ImageId, ListedImage>>,
     tcp_nodelay: bool,
     verbose: bool,
-    semaphore: Arc<Semaphore>
+    semaphore: Arc<Semaphore>,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let _permit = semaphore.acquire().await?;
 
-    vlog!(verbose, "Worker {} starting with {} images", worker_id, ids.len());
+    vlog!(
+        verbose,
+        "Worker {} starting with {} images",
+        worker_id,
+        ids.len()
+    );
 
     let mut pool = TlsConnectionPool::new(
         addr,
         server_name,
         cert_path.as_deref(),
         tcp_nodelay,
-        verbose
-    ).await?;
+        verbose,
+    )
+    .await?;
 
     download_batch_keepalive(&mut pool, &ids, &receive_dir, &by_id, verbose).await?;
 
-    vlog!(verbose, "Worker {} completed {} images", worker_id, ids.len());
+    vlog!(
+        verbose,
+        "Worker {} completed {} images",
+        worker_id,
+        ids.len()
+    );
     Ok(ids.len())
 }
 
@@ -615,14 +649,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // BATCH mode (delta sync)
     if args.batch {
         // First, fetch the catalog to get filenames
-        vlog!(verbose, "BATCH mode: fetching catalog first for filenames...");
+        vlog!(
+            verbose,
+            "BATCH mode: fetching catalog first for filenames..."
+        );
         let tls_list_stream = tls_connect(
             &args.addr,
             &args.server_name,
             args.cert_path.as_deref(),
             args.tcp_nodelay,
-            verbose
-        ).await?;
+            verbose,
+        )
+        .await?;
         let mut list_stream = BufWriter::with_capacity(64 * 1024, tls_list_stream);
 
         write_list_request_buffered(&mut list_stream, 0).await?;
@@ -645,10 +683,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if name_len > name_buf.len() {
                 name_buf.resize(name_len, 0);
             }
-            list_stream.get_mut().read_exact(&mut name_buf[..name_len]).await?;
-            let filename = String::from_utf8_lossy(&name_buf[..name_len]).trim().to_string();
+            list_stream
+                .get_mut()
+                .read_exact(&mut name_buf[..name_len])
+                .await?;
+            let filename = String::from_utf8_lossy(&name_buf[..name_len])
+                .trim()
+                .to_string();
             let size = read_varint_u32(list_stream.get_mut()).await?;
-            by_id.insert(id, ListedImage { id, flags, filename, size });
+            by_id.insert(
+                id,
+                ListedImage {
+                    id,
+                    flags,
+                    filename,
+                    size,
+                },
+            );
         }
         drop(list_stream);
         vlog!(verbose, "Catalog fetched: {} images", by_id.len());
@@ -662,13 +713,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             &args.server_name,
             args.cert_path.as_deref(),
             args.tcp_nodelay,
-            verbose
-        ).await?;
+            verbose,
+        )
+        .await?;
         let mut stream = BufWriter::with_capacity(64 * 1024, tls_stream);
         vlog!(verbose, "TLS connected; sending BATCH request");
 
         // Send BATCH with optional keep-alive flag - single syscall
-        let request_flags = if args.keep_alive { REQUEST_FLAG_KEEP_ALIVE } else { 0 };
+        let request_flags = if args.keep_alive {
+            REQUEST_FLAG_KEEP_ALIVE
+        } else {
+            0
+        };
         write_batch_request_buffered(&mut stream, request_flags, &have_ids).await?;
         stream.flush().await?;
 
@@ -695,8 +751,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         &args.server_name,
         args.cert_path.as_deref(),
         args.tcp_nodelay,
-        verbose
-    ).await?;
+        verbose,
+    )
+    .await?;
     let mut list_stream = BufWriter::with_capacity(64 * 1024, tls_list_stream);
     vlog!(verbose, "TLS connected; sending LIST request");
 
@@ -727,14 +784,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if name_len > name_buf.len() {
             name_buf.resize(name_len, 0);
         }
-        list_stream.get_mut().read_exact(&mut name_buf[..name_len]).await?;
+        list_stream
+            .get_mut()
+            .read_exact(&mut name_buf[..name_len])
+            .await?;
         let filename = String::from_utf8_lossy(&name_buf[..name_len])
             .trim()
             .to_string();
 
         let size = read_varint_u32(list_stream.get_mut()).await?;
 
-        listed.push(ListedImage { id, flags, filename, size });
+        listed.push(ListedImage {
+            id,
+            flags,
+            filename,
+            size,
+        });
     }
 
     vlog!(verbose, "Parsed {} catalog entries", listed.len());
@@ -756,22 +821,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
     }
 
-    let ids: Vec<ImageId> = listed
-        .iter()
-        .map(|i| i.id)
-        .collect();
-    let by_id: Arc<HashMap<ImageId, ListedImage>> = Arc::new(
-        listed
-            .into_iter()
-            .map(|item| (item.id, item))
-            .collect()
-    );
+    let ids: Vec<ImageId> = listed.iter().map(|i| i.id).collect();
+    let by_id: Arc<HashMap<ImageId, ListedImage>> =
+        Arc::new(listed.into_iter().map(|item| (item.id, item)).collect());
 
     // 2) Download images
     let start_time = Instant::now();
 
     for iteration in 0..args.repeat {
-        vlog!(verbose, "Download iteration {}/{}", iteration + 1, args.repeat);
+        vlog!(
+            verbose,
+            "Download iteration {}/{}",
+            iteration + 1,
+            args.repeat
+        );
 
         if args.parallel > 1 {
             // Parallel download mode
@@ -789,22 +852,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let semaphore = Arc::clone(&semaphore);
                 let tcp_nodelay = args.tcp_nodelay;
 
-                handles.push(
-                    tokio::spawn(
-                        parallel_download_worker(
-                            worker_id,
-                            addr,
-                            server_name,
-                            cert_path,
-                            ids_chunk,
-                            receive_dir,
-                            by_id,
-                            tcp_nodelay,
-                            verbose,
-                            semaphore
-                        )
-                    )
-                );
+                handles.push(tokio::spawn(parallel_download_worker(
+                    worker_id,
+                    addr,
+                    server_name,
+                    cert_path,
+                    ids_chunk,
+                    receive_dir,
+                    by_id,
+                    tcp_nodelay,
+                    verbose,
+                    semaphore,
+                )));
             }
 
             // Wait for all workers
@@ -817,7 +876,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     Err(e) => eprintln!("Worker error: {}", e),
                 }
             }
-            vlog!(verbose, "Parallel download complete: {} images", total_downloaded);
+            vlog!(
+                verbose,
+                "Parallel download complete: {} images",
+                total_downloaded
+            );
         } else if args.keep_alive {
             // Single connection with keep-alive
             let mut pool = TlsConnectionPool::new(
@@ -825,8 +888,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 args.server_name.clone(),
                 args.cert_path.as_deref(),
                 args.tcp_nodelay,
-                verbose
-            ).await?;
+                verbose,
+            )
+            .await?;
 
             download_batch_keepalive(&mut pool, &ids, &receive_dir, &by_id, verbose).await?;
         } else {
@@ -842,16 +906,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &args.server_name,
                 args.cert_path.as_deref(),
                 args.tcp_nodelay,
-                verbose
-            ).await?;
+                verbose,
+            )
+            .await?;
             let mut stream = BufWriter::with_capacity(64 * 1024, tls_stream);
 
-            vlog!(verbose, "TLS connected; sending GET_BY_ID request ({} ids)", ids.len());
+            vlog!(
+                verbose,
+                "TLS connected; sending GET_BY_ID request ({} ids)",
+                ids.len()
+            );
 
             // Send request with buffered write - single syscall
             if ids.len() > (u8::MAX as usize) {
                 return Err(
-                    format!("too many images to request in one batch: {}", ids.len()).into()
+                    format!("too many images to request in one batch: {}", ids.len()).into(),
                 );
             }
             write_get_request_buffered(&mut stream, 0, &ids).await?; // No keep-alive

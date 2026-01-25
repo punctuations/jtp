@@ -1,35 +1,22 @@
-use tokio::net::TcpListener;
-use tokio::io::{ AsyncReadExt, AsyncWriteExt, BufWriter };
 use jtp::protocol::{
-    ImageCatalog,
-    send_catalog_buffered,
-    send_image_with_options,
-    send_error,
-    read_varint_u32,
-    validate_request_flags,
-    read_image_ids,
-    encode_varint_to_buf,
-    ImageId,
-    ErrorCode,
-    REQUEST_BATCH,
-    REQUEST_GET_BY_ID,
-    REQUEST_LIST,
-    REQUEST_LIST_AND_GET,
-    REQUEST_FLAG_KEEP_ALIVE,
-    RESPONSE_BATCH,
-    RESPONSE_LIST_AND_GET,
+    encode_varint_to_buf, read_image_ids, read_varint_u32, send_catalog_buffered, send_error,
+    send_image_with_options, validate_request_flags, ErrorCode, ImageCatalog, ImageId,
+    REQUEST_BATCH, REQUEST_FLAG_KEEP_ALIVE, REQUEST_GET_BY_ID, REQUEST_LIST, REQUEST_LIST_AND_GET,
+    RESPONSE_BATCH, RESPONSE_LIST_AND_GET,
 };
-use tokio_rustls::TlsAcceptor;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
-use rustls::pki_types::{ CertificateDer, PrivateKeyDer };
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
-use std::collections::{ HashMap, HashSet };
-use std::time::{ Duration, Instant };
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+use tokio_rustls::TlsAcceptor;
 
 /// Simple sliding window rate limiter per IP address
 struct RateLimiter {
@@ -92,11 +79,10 @@ macro_rules! vlog {
 
 async fn load_or_generate_tls_material(
     cert_path: &Path,
-    key_path: &Path
+    key_path: &Path,
 ) -> tokio::io::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     if !cert_path.exists() || !key_path.exists() {
-        let certified = rcgen
-            ::generate_simple_self_signed(vec!["localhost".to_string()])
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
             .map_err(|e| tokio::io::Error::new(tokio::io::ErrorKind::InvalidData, e))?;
 
         let cert_pem = certified.cert.pem();
@@ -119,14 +105,12 @@ async fn load_or_generate_tls_material(
 
     let key: PrivateKeyDer<'static> = {
         let mut reader = BufReader::new(std::io::Cursor::new(key_bytes));
-        rustls_pemfile
-            ::private_key(&mut reader)?
-            .ok_or_else(|| {
-                tokio::io::Error::new(
-                    tokio::io::ErrorKind::InvalidData,
-                    "no private key found in key.pem"
-                )
-            })?
+        rustls_pemfile::private_key(&mut reader)?.ok_or_else(|| {
+            tokio::io::Error::new(
+                tokio::io::ErrorKind::InvalidData,
+                "no private key found in key.pem",
+            )
+        })?
     };
 
     Ok((certs, key))
@@ -143,9 +127,9 @@ struct ServerArgs {
     verbose: bool,
     keep_alive_timeout: Duration,
     tcp_nodelay: bool,
-    no_tls: bool, // Plain TCP mode for trusted networks/benchmarking
-    rate_limit: Option<usize>,      // Max requests per window (None = disabled)
-    rate_limit_window: Duration,    // Time window for rate limiting
+    no_tls: bool,                // Plain TCP mode for trusted networks/benchmarking
+    rate_limit: Option<usize>,   // Max requests per window (None = disabled)
+    rate_limit_window: Duration, // Time window for rate limiting
 }
 
 fn parse_args() -> ServerArgs {
@@ -272,9 +256,9 @@ async fn handle_requests<S>(
     catalog: Arc<ImageCatalog>,
     compression_threshold: f32,
     keep_alive_timeout: Duration,
-    verbose: bool
-)
-    where S: AsyncReadExt + AsyncWriteExt + Unpin
+    verbose: bool,
+) where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     let mut request_count = 0u64;
     loop {
@@ -285,19 +269,25 @@ async fn handle_requests<S>(
         };
 
         let mut header = [0u8; 2];
-        let header_result = tokio::time::timeout(
-            read_timeout,
-            stream.get_mut().read_exact(&mut header)
-        ).await;
+        let header_result =
+            tokio::time::timeout(read_timeout, stream.get_mut().read_exact(&mut header)).await;
 
         let (request_type, request_flags) = match header_result {
             Ok(Ok(_)) => (header[0], header[1]),
             Ok(Err(_)) => {
-                vlog!(verbose, "Client disconnected (requests served: {})", request_count);
+                vlog!(
+                    verbose,
+                    "Client disconnected (requests served: {})",
+                    request_count
+                );
                 return;
             }
             Err(_) => {
-                vlog!(verbose, "Keep-alive timeout (requests served: {})", request_count);
+                vlog!(
+                    verbose,
+                    "Keep-alive timeout (requests served: {})",
+                    request_count
+                );
                 return;
             }
         };
@@ -314,26 +304,38 @@ async fn handle_requests<S>(
         let keep_alive = (request_flags & REQUEST_FLAG_KEEP_ALIVE) != 0;
 
         match request_type {
-            REQUEST_LIST =>
-                vlog!(verbose, "Request #{}: LIST (keep-alive={})", request_count, keep_alive),
-            REQUEST_GET_BY_ID =>
-                vlog!(verbose, "Request #{}: GET_BY_ID (keep-alive={})", request_count, keep_alive),
-            REQUEST_BATCH =>
-                vlog!(verbose, "Request #{}: BATCH (keep-alive={})", request_count, keep_alive),
-            REQUEST_LIST_AND_GET =>
-                vlog!(
-                    verbose,
-                    "Request #{}: LIST_AND_GET (keep-alive={})",
-                    request_count,
-                    keep_alive
-                ),
+            REQUEST_LIST => vlog!(
+                verbose,
+                "Request #{}: LIST (keep-alive={})",
+                request_count,
+                keep_alive
+            ),
+            REQUEST_GET_BY_ID => vlog!(
+                verbose,
+                "Request #{}: GET_BY_ID (keep-alive={})",
+                request_count,
+                keep_alive
+            ),
+            REQUEST_BATCH => vlog!(
+                verbose,
+                "Request #{}: BATCH (keep-alive={})",
+                request_count,
+                keep_alive
+            ),
+            REQUEST_LIST_AND_GET => vlog!(
+                verbose,
+                "Request #{}: LIST_AND_GET (keep-alive={})",
+                request_count,
+                keep_alive
+            ),
             other => {
                 vlog!(verbose, "Unknown request type: {}", other);
                 let _ = send_error(
                     &mut stream,
                     ErrorCode::InvalidRequest,
-                    "unknown request type"
-                ).await;
+                    "unknown request type",
+                )
+                .await;
                 let _ = stream.flush().await;
                 return;
             }
@@ -357,13 +359,13 @@ async fn handle_requests<S>(
             // Send all images directly (no separate catalog - IDs come with each image)
             for id in sorted.iter().take(count as usize) {
                 if let Some(metadata) = catalog.images.get(id) {
-                    if
-                        let Err(e) = send_image_with_options(
-                            &mut stream,
-                            metadata,
-                            compression_threshold,
-                            verbose
-                        ).await
+                    if let Err(e) = send_image_with_options(
+                        &mut stream,
+                        metadata,
+                        compression_threshold,
+                        verbose,
+                    )
+                    .await
                     {
                         vlog!(verbose, "Failed to send image: {}", e);
                         return;
@@ -416,8 +418,9 @@ async fn handle_requests<S>(
                 let _ = send_error(
                     &mut stream,
                     ErrorCode::InvalidRequest,
-                    "have_count too large"
-                ).await;
+                    "have_count too large",
+                )
+                .await;
                 let _ = stream.flush().await;
                 return;
             }
@@ -435,7 +438,11 @@ async fn handle_requests<S>(
                 .sorted_ids()
                 .iter()
                 .filter_map(|id| {
-                    if !have.contains(id) { catalog.images.get(id) } else { None }
+                    if !have.contains(id) {
+                        catalog.images.get(id)
+                    } else {
+                        None
+                    }
                 })
                 .collect();
 
@@ -451,13 +458,9 @@ async fn handle_requests<S>(
             }
 
             for metadata in missing.into_iter().take(missing_count_u32 as usize) {
-                if
-                    let Err(e) = send_image_with_options(
-                        &mut stream,
-                        metadata,
-                        compression_threshold,
-                        verbose
-                    ).await
+                if let Err(e) =
+                    send_image_with_options(&mut stream, metadata, compression_threshold, verbose)
+                        .await
                 {
                     vlog!(verbose, "Failed to send image: {}", e);
                     return;
@@ -490,13 +493,9 @@ async fn handle_requests<S>(
         for id in ids {
             vlog!(verbose, "Requested id={}", hex::encode(id.to_be_bytes()));
             if let Some(metadata) = catalog.get_metadata(&id) {
-                if
-                    let Err(e) = send_image_with_options(
-                        &mut stream,
-                        metadata,
-                        compression_threshold,
-                        verbose
-                    ).await
+                if let Err(e) =
+                    send_image_with_options(&mut stream, metadata, compression_threshold, verbose)
+                        .await
                 {
                     vlog!(verbose, "Failed to send image: {}", e);
                     return;
@@ -529,15 +528,16 @@ async fn main() -> tokio::io::Result<()> {
         args.rate_limit
     );
 
-    let catalog = Arc::new(
-        ImageCatalog::from_dir(&args.images_dir, args.only_name_contains.as_deref())
-    );
+    let catalog = Arc::new(ImageCatalog::from_dir(
+        &args.images_dir,
+        args.only_name_contains.as_deref(),
+    ));
     println!("Loaded {} images", catalog.images.len());
 
     // Create rate limiter if configured
-    let rate_limiter: Option<Arc<RateLimiter>> = args.rate_limit.map(|limit| {
-        Arc::new(RateLimiter::new(limit, args.rate_limit_window))
-    });
+    let rate_limiter: Option<Arc<RateLimiter>> = args
+        .rate_limit
+        .map(|limit| Arc::new(RateLimiter::new(limit, args.rate_limit_window)));
 
     // Spawn cleanup task if rate limiting is enabled
     if let Some(ref limiter) = rate_limiter {
@@ -559,15 +559,12 @@ async fn main() -> tokio::io::Result<()> {
         );
         println!(
             "Keep-alive timeout: {:?}, TCP_NODELAY: {}, TLS: {}",
-            args.keep_alive_timeout,
-            args.tcp_nodelay,
-            !args.no_tls
+            args.keep_alive_timeout, args.tcp_nodelay, !args.no_tls
         );
         if let Some(limit) = args.rate_limit {
             println!(
                 "Rate limit: {} requests per {:?} per IP",
-                limit,
-                args.rate_limit_window
+                limit, args.rate_limit_window
             );
         }
     }
@@ -576,7 +573,10 @@ async fn main() -> tokio::io::Result<()> {
 
     if args.no_tls {
         // Plain TCP mode for trusted networks / benchmarking
-        println!("JTP server (PLAIN TCP - no encryption) listening on {}", args.bind);
+        println!(
+            "JTP server (PLAIN TCP - no encryption) listening on {}",
+            args.bind
+        );
         println!("WARNING: No TLS encryption - use only on trusted networks!");
 
         let verbose = args.verbose;
@@ -603,7 +603,9 @@ async fn main() -> tokio::io::Result<()> {
                     if !limiter.check(addr.ip()).await {
                         vlog!(verbose, "Rate limited: {}", addr.ip());
                         let mut stream = BufWriter::with_capacity(64 * 1024, socket);
-                        let _ = send_error(&mut stream, ErrorCode::RateLimited, "too many requests").await;
+                        let _ =
+                            send_error(&mut stream, ErrorCode::RateLimited, "too many requests")
+                                .await;
                         let _ = stream.flush().await;
                         return;
                     }
@@ -615,8 +617,9 @@ async fn main() -> tokio::io::Result<()> {
                     catalog,
                     compression_threshold,
                     keep_alive_timeout,
-                    verbose
-                ).await;
+                    verbose,
+                )
+                .await;
             });
         }
     } else {
@@ -660,7 +663,12 @@ async fn main() -> tokio::io::Result<()> {
                         // For TLS, we need to complete handshake to send error
                         if let Ok(tls_stream) = acceptor.accept(socket).await {
                             let mut stream = BufWriter::with_capacity(64 * 1024, tls_stream);
-                            let _ = send_error(&mut stream, ErrorCode::RateLimited, "too many requests").await;
+                            let _ = send_error(
+                                &mut stream,
+                                ErrorCode::RateLimited,
+                                "too many requests",
+                            )
+                            .await;
                             let _ = stream.flush().await;
                         }
                         return;
@@ -683,8 +691,9 @@ async fn main() -> tokio::io::Result<()> {
                     catalog,
                     compression_threshold,
                     keep_alive_timeout,
-                    verbose
-                ).await;
+                    verbose,
+                )
+                .await;
             });
         }
     }

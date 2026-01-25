@@ -59,6 +59,7 @@ ImageID = xxHash64(file_bytes, seed=0)
 Encoded on the wire as `u64` big-endian.
 
 If you change this, update:
+
 - `src/protocol.rs`
 - `src/bin/server.rs`
 - `src/bin/client.rs`
@@ -77,7 +78,7 @@ If you change this, update:
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Ensure `cargo build --workspace` and `cargo test --workspace` pass
+4. Ensure `cargo build` and `cargo test` pass
 5. Open a pull request with:
    - What changed
    - Why it changed
