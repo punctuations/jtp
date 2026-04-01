@@ -1,5 +1,9 @@
 # Jason Transfer Protocol (JTP)
 
+> [!NOTE]
+> JTP has been submitted as an Internet-Draft to the IETF. As such, it is a work in progress and subject to change based on ongoing discussion and review within the IETF community.
+
+
 **JTP** is a high-performance binary protocol for transferring images over TCP
 with optional TLS encryption and intelligent compression.
 
