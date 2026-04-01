@@ -3,6 +3,9 @@ output
 Cargo.lock
 
 *.pem
+draft-*.xml
+draft-*.txt
+draft-*.html
 
 # --- Next.js docs site (docs/) ---
 
