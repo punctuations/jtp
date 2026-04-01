@@ -1,0 +1,117 @@
+name: "Bug Report"
+description: "Report a bug in the JTP server or client implementation."
+title: "[BUG] "
+labels: ["bug", "needs-triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Bug Report
+        Use this template for implementation bugs — unexpected crashes, incorrect
+        behaviour, wrong bytes on the wire, etc.
+
+        If you have found a **security vulnerability or exploit**, please use the
+        [Security Vulnerability](?template=security-vulnerability.yml) template instead.
+
+        If the issue is with the **protocol specification** (ambiguity, contradiction,
+        or errata in the RFC), please use the
+        [Spec Errata](?template=spec-errata.yml) template instead.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      options:
+        - Server (`src/bin/server.rs`)
+        - Client (`src/bin/client.rs`)
+        - Protocol core (`src/protocol.rs`)
+        - TLS / connection handling
+        - Compression (Zstd)
+        - CLI / flags
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust Version
+      placeholder: "e.g. rustc 1.77.0 (stable)"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: "e.g. macOS 14.4, Ubuntu 24.04, Windows 11"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Provide the exact commands and/or code needed to reproduce the issue.
+      value: |
+        1. Start the server with: `cargo run --bin server -- ...`
+        2. Run the client with: `cargo run --bin client -- ...`
+        3. Observe: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Output
+      description: |
+        Paste relevant log output. Run with `--verbose` to get detailed output.
+        If the bug is protocol-level, include a hexdump of the bytes exchanged
+        (e.g. from `xxd` or Wireshark).
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: hexdump
+    attributes:
+      label: Hexdump (if protocol-level)
+      description: |
+        If the bug relates to incorrect framing or parsing, paste a hexdump of
+        the relevant bytes. Annotate with field names where possible.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have reproduced this on the latest `main` branch.
+          required: true
+        - label: I have checked that this is not a known issue in the existing open issues.
+          required: true

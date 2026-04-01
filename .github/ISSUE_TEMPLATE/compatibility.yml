@@ -1,0 +1,108 @@
+name: "Implementation Compatibility Report"
+description: "Report a compatibility issue between the JTP reference implementation and a third-party implementation."
+title: "[COMPAT] "
+labels: ["compatibility", "needs-triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Implementation Compatibility Report
+        Use this template if you have written a JTP implementation (in any language)
+        and have found that it does not interoperate correctly with the reference
+        Rust implementation, or if two implementations disagree on the correct
+        interpretation of the spec.
+
+        This template is also appropriate for reporting issues with the reference
+        implementation's behaviour against an edge case that a third-party
+        implementation exposed.
+
+  - type: input
+    id: third-party-impl
+    attributes:
+      label: Third-Party Implementation
+      description: Name, language, and link to the implementation (if public).
+      placeholder: "e.g. jtp-go v0.1.0 — https://github.com/example/jtp-go"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: message-type
+    attributes:
+      label: Affected Message Type
+      description: Which JTP message type does the incompatibility involve?
+      options:
+        - LIST (ReqType 1) / LIST response
+        - GET_BY_ID (ReqType 0)
+        - BATCH (ReqType 2) / BATCH response
+        - LIST_AND_GET (ReqType 5) / LIST_AND_GET response
+        - Image Packet (shared response type)
+        - ERROR response
+        - Connection / keep-alive handling
+        - TLS / ALPN negotiation
+        - Varint encoding/decoding
+        - Flags field parsing
+        - ImageID computation
+        - Multiple / other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description of Incompatibility
+      description: |
+        Describe what each side does and why they disagree.
+        Reference specific RFC sections if applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: wire-bytes
+    attributes:
+      label: Wire Bytes (hexdump)
+      description: |
+        Provide a hexdump of the bytes exchanged, annotated with field names.
+        This is the most useful thing you can include for protocol-level issues.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behaviour (per RFC)
+      description: Quote or cite the RFC section that describes the correct behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behaviour Observed
+      description: What does the reference implementation actually do?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: root-cause
+    attributes:
+      label: Suspected Root Cause
+      options:
+        - "Reference implementation bug (the RFC is clear, the code is wrong)"
+        - "Spec ambiguity (the RFC is unclear, both implementations are reasonable)"
+        - "Third-party implementation bug (the RFC is clear, third-party is wrong)"
+        - "Unsure"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have included enough detail (hexdump, logs, or code) to reproduce the issue.
+          required: true
+        - label: I have checked whether this is a known spec errata (see open Errata issues).
+          required: true

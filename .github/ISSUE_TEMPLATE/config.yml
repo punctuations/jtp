@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: "Private Security Disclosure"
+    url: "https://github.com/punctuations/jtp/security/advisories/new"
+    about: "Report a security vulnerability privately via GitHub's coordinated disclosure tool."
+
+  - name: "Protocol Discussion (RFC)"
+    url: "https://github.com/punctuations/jtp/blob/main/RFC.md"
+    about: "Read the full JTP protocol specification before filing an extension or errata issue."
+
+  - name: "IETF Internet-Draft"
+    url: "https://jtp.mattt.space/rfc"
+    about: "View the rendered IETF Internet-Draft for JTP."

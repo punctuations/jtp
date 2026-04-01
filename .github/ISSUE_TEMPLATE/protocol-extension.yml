@@ -1,0 +1,109 @@
+name: "Protocol Extension Proposal"
+description: "Propose a new request type, flag, field, or other addition to the JTP wire format."
+title: "[EXTENSION] "
+labels: ["protocol", "extension", "needs-discussion"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Protocol Extension Proposal
+        Use this template to propose changes or additions to the JTP wire format.
+        Extensions that modify existing message framing or break backwards compatibility
+        require a stronger justification than purely additive changes.
+
+        Please read the [RFC](./RFC.md) and [CONTRIBUTING.md](./CONTRIBUTING.md) before filing.
+
+  - type: dropdown
+    id: extension-kind
+    attributes:
+      label: Extension Kind
+      description: What kind of addition is this?
+      options:
+        - New ReqType (request message type)
+        - New Flags bit assignment
+        - New response framing / magic header
+        - New error code
+        - New data type or encoding
+        - New ALPN identifier / versioning
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: |
+        What problem does this extension solve? Include concrete use cases.
+        If this is driven by a real deployment need, describe it here.
+      placeholder: "e.g. There is currently no way for a client to request a partial image range, which is needed when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Wire Format
+      description: |
+        Describe the on-wire encoding of your extension. Use the same table
+        format as the RFC where possible.
+      value: |
+        | Field | Type | Size (octets) | Description |
+        |-------|------|---------------|-------------|
+        |       |      |               |             |
+    validations:
+      required: true
+
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Semantics and Behaviour
+      description: |
+        Describe the expected behaviour of senders and receivers. Use
+        RFC 2119 keywords (MUST, SHOULD, MAY) where appropriate.
+      placeholder: "When the X flag is set, receivers MUST..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: compatibility
+    attributes:
+      label: Backwards Compatibility
+      description: How does this affect existing implementations?
+      options:
+        - "Purely additive — existing implementations can ignore it"
+        - "Requires a new ReqType value — old servers will return UnsupportedFeature"
+        - "Modifies existing framing — breaking change, needs new ALPN (jtp/2)"
+        - "Unsure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider and why did you rule them out?
+    validations:
+      required: false
+
+  - type: textarea
+    id: implementation-notes
+    attributes:
+      label: Implementation Notes
+      description: Any notes relevant to implementing this in the Rust client/server, if applicable.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have read the current RFC and this does not duplicate an existing feature.
+          required: true
+        - label: I have considered the impact on resource limits (Section 11 of the RFC).
+          required: true
+        - label: I have considered the security implications (Section 13 of the RFC).
+          required: true

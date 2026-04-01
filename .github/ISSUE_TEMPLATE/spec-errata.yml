@@ -1,0 +1,97 @@
+name: "Spec Errata / Ambiguity"
+description: "Report an error, ambiguity, contradiction, or unclear section in the JTP RFC."
+title: "[ERRATA] "
+labels: ["spec", "errata", "needs-discussion"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Spec Errata / Ambiguity
+        Use this template when the issue is with the **protocol specification**
+        itself — not the Rust implementation. This includes:
+        - Contradictions between sections of the RFC
+        - Underspecified behaviour that causes interoperability problems
+        - Incorrect normative language (MUST/SHOULD/MAY used inconsistently)
+        - Typographical errors or misleading wording in the RFC
+        - Gaps that a conformant implementation cannot fill without guessing
+
+        If the problem is with the Rust **implementation** (not the spec), use the
+        [Bug Report](?template=bug-report.yml) template instead.
+
+  - type: dropdown
+    id: errata-kind
+    attributes:
+      label: Errata Kind
+      options:
+        - Contradiction (two sections disagree)
+        - Ambiguity (behaviour is underspecified)
+        - Incorrect normative language (wrong MUST/SHOULD/MAY)
+        - Missing case (the spec does not cover a reachable state)
+        - Typographical / editorial error
+        - Interoperability problem observed between two implementations
+    validations:
+      required: true
+
+  - type: input
+    id: section
+    attributes:
+      label: RFC Section(s)
+      description: Which section(s) of the RFC are affected?
+      placeholder: "e.g. Section 8.2, Section 9.2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-text
+    attributes:
+      label: Current Text
+      description: Quote the relevant passage(s) from the RFC as they currently read.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Description
+      description: |
+        Explain what is wrong or unclear. If this is an interoperability issue,
+        describe how two conformant implementations could disagree.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-text
+    attributes:
+      label: Proposed Corrected Text
+      description: |
+        If you have a suggested fix, paste the replacement text here.
+        Use RFC 2119 keywords where applicable.
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Interoperability Impact
+      description: Does this errata affect wire compatibility between implementations?
+      options:
+        - "Yes — implementations will disagree on the wire format"
+        - "Yes — implementations will disagree on error handling"
+        - "No — editorial only, no behaviour change"
+        - "Unsure"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have read the full RFC and confirmed this is not addressed elsewhere.
+          required: true
+        - label: I have checked open issues to avoid duplicates.
+          required: true
