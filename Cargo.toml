@@ -30,7 +30,3 @@ colored = "2"
 [[example]]
 name = "benchmark"
 path = "examples/benchmark.rs"
-
-[[example]]
-name = "jtp_quic_client"
-path = "examples/jtp_quic_client.rs"
