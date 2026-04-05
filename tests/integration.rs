@@ -23,21 +23,54 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter, DuplexStream};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, RwLock};
+use tokio::io::{ AsyncReadExt, AsyncWriteExt, BufWriter, DuplexStream };
+use tokio::net::{ TcpListener, TcpStream };
+use tokio::sync::{ broadcast, RwLock };
 
 use jtp::protocol::{
-    compute_image_id, encode_varint_to_buf, file_type_from_flags, flags_from_file_type,
-    read_image_ids, read_varint_u32, send_cancel_ack, send_catalog, send_catalog_buffered,
-    send_error, send_image, send_image_with_options, send_watch_event, validate_request_flags,
-    write_batch_request_buffered, write_cancel_request_buffered, write_get_request_buffered,
-    write_image_header_buffered, write_list_and_get_request_buffered,
-    write_list_request_buffered, write_varint_u32, write_watch_request_buffered, ErrorCode,
-    ImageCatalog, ImageId, ImageMetadata, WatchEvent, FLAG_COMPRESSED, FLAGS_FILE_TYPE_MASK,
-    REQUEST_BATCH, REQUEST_CANCEL, REQUEST_FLAG_KEEP_ALIVE, REQUEST_GET_BY_ID, REQUEST_LIST,
-    REQUEST_LIST_AND_GET, REQUEST_WATCH, RESPONSE_BATCH, RESPONSE_CANCEL, RESPONSE_ERROR,
-    RESPONSE_GET_BY_ID, RESPONSE_LIST, RESPONSE_LIST_AND_GET, RESPONSE_WATCH,
+    compute_image_id,
+    encode_varint_to_buf,
+    file_type_from_flags,
+    flags_from_file_type,
+    read_image_ids,
+    read_varint_u32,
+    send_cancel_ack,
+    send_catalog,
+    send_catalog_buffered,
+    send_error,
+    send_image,
+    send_image_with_options,
+    send_watch_event,
+    validate_request_flags,
+    write_batch_request_buffered,
+    write_cancel_request_buffered,
+    write_get_request_buffered,
+    write_image_header_buffered,
+    write_list_and_get_request_buffered,
+    write_list_request_buffered,
+    write_varint_u32,
+    write_watch_request_buffered,
+    ErrorCode,
+    ImageCatalog,
+    ImageId,
+    ImageMetadata,
+    WatchEvent,
+    FLAG_COMPRESSED,
+    FLAGS_FILE_TYPE_MASK,
+    REQUEST_BATCH,
+    REQUEST_CANCEL,
+    REQUEST_FLAG_KEEP_ALIVE,
+    REQUEST_GET_BY_ID,
+    REQUEST_LIST,
+    REQUEST_LIST_AND_GET,
+    REQUEST_WATCH,
+    RESPONSE_BATCH,
+    RESPONSE_CANCEL,
+    RESPONSE_ERROR,
+    RESPONSE_GET_BY_ID,
+    RESPONSE_LIST,
+    RESPONSE_LIST_AND_GET,
+    RESPONSE_WATCH,
 };
 
 // ============================================================================
@@ -51,7 +84,7 @@ fn fake_image(id: ImageId, file_type: u8, data: Vec<u8>) -> ImageMetadata {
     ImageMetadata {
         id,
         flags,
-        file_name:   PathBuf::from(format!("test_{:016x}.png", id)),
+        file_name: PathBuf::from(format!("test_{:016x}.png", id)),
         cached_data: Some(Arc::new(data)),
     }
 }
@@ -60,7 +93,7 @@ fn fake_image(id: ImageId, file_type: u8, data: Vec<u8>) -> ImageMetadata {
 fn make_catalog(images: Vec<Vec<u8>>) -> ImageCatalog {
     let mut cat = ImageCatalog::new_empty();
     for data in images {
-        let id   = compute_image_id(&data);
+        let id = compute_image_id(&data);
         let meta = fake_image(id, 0, data);
         cat.add_image(meta, false);
     }
@@ -75,7 +108,7 @@ fn make_catalog(images: Vec<Vec<u8>>) -> ImageCatalog {
 /// running `handle_requests`.
 async fn bind_ephemeral() -> (TcpListener, SocketAddr) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr     = listener.local_addr().unwrap();
+    let addr = listener.local_addr().unwrap();
     (listener, addr)
 }
 
@@ -135,7 +168,7 @@ mod protocol {
     async fn varint_example_from_rfc() {
         // RFC appendix: 4660 (0x1234) → 0xB4 0x24
         assert_eq!(varint_round_trip(4660).await, 4660);
-        assert_eq!(encode(4660), vec![0xB4, 0x24]);
+        assert_eq!(encode(4660), vec![0xb4, 0x24]);
     }
 
     #[tokio::test]
@@ -182,7 +215,7 @@ mod protocol {
     fn image_id_seed_zero() {
         // xxHash64 with seed 0 — spot-check the known output for empty input.
         // xxHash64("", seed=0) = 0xEF46DB3751D8E999
-        assert_eq!(compute_image_id(b""), 0xEF46DB3751D8E999u64);
+        assert_eq!(compute_image_id(b""), 0xef46db3751d8e999u64);
     }
 
     // ── Flags helpers ─────────────────────────────────────────────────────────
@@ -190,7 +223,7 @@ mod protocol {
     #[test]
     fn flags_file_type_roundtrip() {
         for ft in 0u8..=7 {
-            let flags    = flags_from_file_type(ft);
+            let flags = flags_from_file_type(ft);
             let recovered = file_type_from_flags(flags);
             assert_eq!(recovered, ft, "file type {} did not round-trip", ft);
         }
@@ -223,19 +256,19 @@ mod protocol {
     }
 
     #[test]
-    fn request_flags_rejects_reserved_bit_1() {
-        assert!(validate_request_flags(0b0000_0010).is_err());
+    fn request_flags_rejects_reserved_bit_2() {
+        assert!(validate_request_flags(0b0000_0100).is_err());
     }
 
     #[test]
     fn request_flags_rejects_reserved_bits_all_set() {
-        assert!(validate_request_flags(0b1111_1110).is_err());
+        assert!(validate_request_flags(0b1111_1100).is_err());
     }
 
     #[test]
     fn request_flags_rejects_reserved_plus_keepalive() {
-        // Bit 0 (keep-alive) is valid; bit 1 is reserved → should fail.
-        assert!(validate_request_flags(0b0000_0011).is_err());
+        // Bit 0 (keep-alive) is valid; bit 2 is reserved → should fail.
+        assert!(validate_request_flags(0b0000_0101).is_err());
     }
 
     // ── send_error / read_error ───────────────────────────────────────────────
@@ -251,18 +284,18 @@ mod protocol {
         assert_eq!(&hdr, RESPONSE_ERROR);
 
         let (code, msg) = jtp::protocol::read_error(&mut b).await.unwrap();
-        assert_eq!(code,  ErrorCode::NotFound);
-        assert_eq!(msg,   "missing");
+        assert_eq!(code, ErrorCode::NotFound);
+        assert_eq!(msg, "missing");
     }
 
     #[tokio::test]
     async fn error_round_trip_all_codes() {
         let cases = [
-            (ErrorCode::NotFound,           "nf"),
-            (ErrorCode::InvalidRequest,     "ir"),
-            (ErrorCode::ServerError,        "se"),
+            (ErrorCode::NotFound, "nf"),
+            (ErrorCode::InvalidRequest, "ir"),
+            (ErrorCode::ServerError, "se"),
             (ErrorCode::UnsupportedFeature, "uf"),
-            (ErrorCode::RateLimited,        "rl"),
+            (ErrorCode::RateLimited, "rl"),
         ];
 
         for (code, msg) in cases {
@@ -276,7 +309,7 @@ mod protocol {
 
             let (got_code, got_msg) = jtp::protocol::read_error(&mut b).await.unwrap();
             assert_eq!(got_code, code);
-            assert_eq!(got_msg,  msg);
+            assert_eq!(got_msg, msg);
         }
     }
 
@@ -300,20 +333,20 @@ mod protocol {
     #[tokio::test]
     async fn image_header_round_trip() {
         let (mut a, mut b) = tokio::io::duplex(64);
-        let flags  = flags_from_file_type(0) | FLAG_COMPRESSED;
+        let flags = flags_from_file_type(0) | FLAG_COMPRESSED;
         let length = 12345u32;
-        let id     = 0xDEADBEEFCAFEBABEu64;
+        let id = 0xdeadbeefcafebabeu64;
 
         write_image_header_buffered(&mut a, flags, length, id).await.unwrap();
         drop(a);
 
-        let got_flags  = b.read_u8().await.unwrap();
+        let got_flags = b.read_u8().await.unwrap();
         let got_length = read_varint_u32(&mut b).await.unwrap();
-        let got_id     = b.read_u64().await.unwrap();
+        let got_id = b.read_u64().await.unwrap();
 
-        assert_eq!(got_flags,  flags);
+        assert_eq!(got_flags, flags);
         assert_eq!(got_length, length);
-        assert_eq!(got_id,     id);
+        assert_eq!(got_id, id);
     }
 
     #[tokio::test]
@@ -346,10 +379,10 @@ mod protocol {
     async fn watch_event_round_trip() {
         let (mut a, mut b) = tokio::io::duplex(256);
         let event = WatchEvent {
-            id:       0x0102030405060708,
-            flags:    flags_from_file_type(1),
+            id: 0x0102030405060708,
+            flags: flags_from_file_type(1),
             filename: "photo.jpg".to_string(),
-            size:     4096,
+            size: 4096,
         };
         send_watch_event(&mut a, &event).await.unwrap();
         drop(a);
@@ -358,18 +391,18 @@ mod protocol {
         b.read_exact(&mut hdr).await.unwrap();
         assert_eq!(&hdr, RESPONSE_WATCH);
 
-        let got_id       = b.read_u64().await.unwrap();
-        let got_flags    = b.read_u8().await.unwrap();
-        let name_len     = b.read_u16().await.unwrap() as usize;
+        let got_id = b.read_u64().await.unwrap();
+        let got_flags = b.read_u8().await.unwrap();
+        let name_len = b.read_u16().await.unwrap() as usize;
         let mut name_buf = vec![0u8; name_len];
         b.read_exact(&mut name_buf).await.unwrap();
-        let got_name     = String::from_utf8(name_buf).unwrap();
-        let got_size     = read_varint_u32(&mut b).await.unwrap();
+        let got_name = String::from_utf8(name_buf).unwrap();
+        let got_size = read_varint_u32(&mut b).await.unwrap();
 
-        assert_eq!(got_id,    event.id);
+        assert_eq!(got_id, event.id);
         assert_eq!(got_flags, event.flags);
-        assert_eq!(got_name,  event.filename);
-        assert_eq!(got_size,  event.size);
+        assert_eq!(got_name, event.filename);
+        assert_eq!(got_size, event.size);
     }
 }
 
@@ -396,7 +429,7 @@ mod catalog {
     fn catalog_rejects_collision() {
         // Two identical byte sequences → same ImageID → second must be skipped.
         let bytes = b"duplicate content".to_vec();
-        let id    = compute_image_id(&bytes);
+        let id = compute_image_id(&bytes);
         let meta1 = fake_image(id, 0, bytes.clone());
         let meta2 = fake_image(id, 1, bytes.clone()); // same ID, different flags
 
@@ -415,8 +448,8 @@ mod catalog {
     fn catalog_sorted_ids_are_stable() {
         let data_a = b"aaaa".to_vec();
         let data_b = b"bbbb".to_vec();
-        let id_a   = compute_image_id(&data_a);
-        let id_b   = compute_image_id(&data_b);
+        let id_a = compute_image_id(&data_a);
+        let id_b = compute_image_id(&data_b);
 
         let mut cat = ImageCatalog::new_empty();
         cat.add_image(fake_image(id_b, 0, data_b), false);
@@ -437,7 +470,7 @@ mod catalog {
         let dir = tempfile::tempdir().unwrap();
         write_temp_image(&dir, "image.png", b"\x89PNG...fake");
         write_temp_image(&dir, "readme.txt", b"not an image");
-        write_temp_image(&dir, "script.sh",  b"#!/bin/sh");
+        write_temp_image(&dir, "script.sh", b"#!/bin/sh");
 
         let cat = ImageCatalog::from_dir(dir.path(), None);
         assert_eq!(cat.images.len(), 1, "only PNG should be loaded");
@@ -446,8 +479,8 @@ mod catalog {
     #[test]
     fn catalog_from_dir_name_filter() {
         let dir = tempfile::tempdir().unwrap();
-        write_temp_image(&dir, "sunset.jpg",    b"jpg_data_a");
-        write_temp_image(&dir, "portrait.jpg",  b"jpg_data_b");
+        write_temp_image(&dir, "sunset.jpg", b"jpg_data_a");
+        write_temp_image(&dir, "portrait.jpg", b"jpg_data_b");
         write_temp_image(&dir, "landscape.png", b"png_data_c");
 
         let cat = ImageCatalog::from_dir(dir.path(), Some("portrait"));
@@ -470,7 +503,7 @@ mod catalog {
         let (mut a, mut b) = tokio::io::duplex(4096);
         let cat = make_catalog(vec![b"img1".to_vec(), b"img2".to_vec(), b"img3".to_vec()]);
 
-        send_catalog(&mut a, &cat).await.unwrap();
+        send_catalog(&mut a, &cat, None).await.unwrap();
         drop(a);
 
         // Header: "JTPL"
@@ -481,20 +514,23 @@ mod catalog {
         // §9.1: Count is varint(u32), not a bare u16.
         // For N=3, varint encodes as a single byte 0x03.
         let count_byte = b.read_u8().await.unwrap();
-        assert!(count_byte & 0x80 == 0, "count=3 should be a 1-byte varint (no continuation bit)");
+        assert!(
+            (count_byte & 0x80) == 0,
+            "count=3 should be a 1-byte varint (no continuation bit)"
+        );
         assert_eq!(count_byte, 3);
     }
 
     #[tokio::test]
     async fn catalog_buffered_matches_unbuffered() {
         let images = vec![b"data_x".to_vec(), b"data_y".to_vec()];
-        let cat    = make_catalog(images);
+        let cat = make_catalog(images);
 
         let (mut a1, mut b1) = tokio::io::duplex(4096);
         let (mut a2, mut b2) = tokio::io::duplex(4096);
 
-        send_catalog(&mut a1, &cat).await.unwrap();
-        send_catalog_buffered(&mut a2, &cat).await.unwrap();
+        send_catalog(&mut a1, &cat, None).await.unwrap();
+        send_catalog_buffered(&mut a2, &cat, None).await.unwrap();
         drop(a1);
         drop(a2);
 
@@ -503,7 +539,11 @@ mod catalog {
         b1.read_to_end(&mut out1).await.unwrap();
         b2.read_to_end(&mut out2).await.unwrap();
 
-        assert_eq!(out1, out2, "send_catalog and send_catalog_buffered must produce identical bytes");
+        assert_eq!(
+            out1,
+            out2,
+            "send_catalog and send_catalog_buffered must produce identical bytes"
+        );
     }
 
     // ── NFC normalisation ─────────────────────────────────────────────────────
@@ -514,23 +554,23 @@ mod catalog {
 
         // "café" in NFD (e + combining accent) vs NFC (é as single codepoint)
         let nfd_name: String = "cafe\u{0301}.png".to_string(); // NFD
-        let nfc_name: String = nfd_name.nfc().collect();       // NFC
+        let nfc_name: String = nfd_name.nfc().collect(); // NFC
 
         let (mut a, mut b) = tokio::io::duplex(4096);
 
-        let data  = b"pixel".to_vec();
-        let id    = compute_image_id(&data);
+        let data = b"pixel".to_vec();
+        let id = compute_image_id(&data);
         let flags = flags_from_file_type(0);
-        let meta  = ImageMetadata {
+        let meta = ImageMetadata {
             id,
             flags,
-            file_name:   PathBuf::from(&nfd_name),
+            file_name: PathBuf::from(&nfd_name),
             cached_data: Some(Arc::new(data)),
         };
         let mut cat = ImageCatalog::new_empty();
         cat.add_image(meta, false);
 
-        send_catalog(&mut a, &cat).await.unwrap();
+        send_catalog(&mut a, &cat, None).await.unwrap();
         drop(a);
 
         let mut hdr = [0u8; 4];
@@ -540,8 +580,8 @@ mod catalog {
         let count = read_varint_u32(&mut b).await.unwrap();
         assert_eq!(count, 1);
 
-        let _id      = b.read_u64().await.unwrap();
-        let _flags   = b.read_u8().await.unwrap();
+        let _id = b.read_u64().await.unwrap();
+        let _flags = b.read_u8().await.unwrap();
         let name_len = b.read_u16().await.unwrap() as usize;
         let mut name_buf = vec![0u8; name_len];
         b.read_exact(&mut name_buf).await.unwrap();
@@ -575,26 +615,33 @@ mod server {
     }
 
     async fn spawn_server_with_watch(
-        catalog:  ImageCatalog,
-        watch_tx: Option<Arc<broadcast::Sender<WatchEvent>>>,
+        catalog: ImageCatalog,
+        watch_tx: Option<Arc<broadcast::Sender<WatchEvent>>>
     ) -> SocketAddr {
-        let listener          = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr              = listener.local_addr().unwrap();
-        let catalog           = Arc::new(RwLock::new(catalog));
-        let compression       = jtp::protocol::DEFAULT_MIN_COMPRESSION_RATIO;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let catalog = Arc::new(RwLock::new(catalog));
+        let compression = jtp::protocol::DEFAULT_MIN_COMPRESSION_RATIO;
         let keep_alive_timeout = Duration::from_secs(5);
 
         tokio::spawn(async move {
             eprintln!("[SERVER] Waiting for connection...");
             let (socket, peer_addr) = listener.accept().await.unwrap();
             eprintln!("[SERVER] Accepted connection from {}", peer_addr);
-            
+
             socket.set_nodelay(true).unwrap();
             let stream = BufWriter::with_capacity(64 * 1024, socket);
             eprintln!("[SERVER] Calling handle_requests with timeout={:?}", keep_alive_timeout);
             // Call the server's internal handler. Because handle_requests is
             // private, we re-export it in a cfg(test) block — see below.
-            test_handle_requests(stream, catalog, compression, keep_alive_timeout, true, watch_tx).await;
+            test_handle_requests(
+                stream,
+                catalog,
+                compression,
+                keep_alive_timeout,
+                true,
+                watch_tx
+            ).await;
             eprintln!("[SERVER] handle_requests returned, task exiting");
         });
 
@@ -606,10 +653,10 @@ mod server {
     #[tokio::test]
     async fn list_response_header_and_varint_count() {
         let images = vec![b"a".to_vec(), b"bb".to_vec(), b"ccc".to_vec()];
-        let addr   = spawn_server(make_catalog(images)).await;
-        let mut w  = plain_connect(addr).await;
+        let addr = spawn_server(make_catalog(images)).await;
+        let mut w = plain_connect(addr).await;
 
-        write_list_request_buffered(&mut w, 0).await.unwrap();
+        write_list_request_buffered(&mut w, 0, None).await.unwrap();
         w.flush().await.unwrap();
 
         let mut hdr = [0u8; 4];
@@ -623,12 +670,12 @@ mod server {
 
     #[tokio::test]
     async fn list_catalog_entry_fields() {
-        let data  = b"test_image_data".to_vec();
-        let id    = compute_image_id(&data);
-        let addr  = spawn_server(make_catalog(vec![data.clone()])).await;
+        let data = b"test_image_data".to_vec();
+        let id = compute_image_id(&data);
+        let addr = spawn_server(make_catalog(vec![data.clone()])).await;
         let mut w = plain_connect(addr).await;
 
-        write_list_request_buffered(&mut w, 0).await.unwrap();
+        write_list_request_buffered(&mut w, 0, None).await.unwrap();
         w.flush().await.unwrap();
 
         // Skip "JTPL" + varint count
@@ -637,14 +684,14 @@ mod server {
         let _count = read_varint_u32(w.get_mut()).await.unwrap();
 
         // Entry: ImageID (u64) + Flags (u8) + NameLen (u16) + Filename + Size (varint)
-        let got_id    = w.get_mut().read_u64().await.unwrap();
+        let got_id = w.get_mut().read_u64().await.unwrap();
         let got_flags = w.get_mut().read_u8().await.unwrap();
-        let name_len  = w.get_mut().read_u16().await.unwrap() as usize;
-        let mut name  = vec![0u8; name_len];
+        let name_len = w.get_mut().read_u16().await.unwrap() as usize;
+        let mut name = vec![0u8; name_len];
         w.get_mut().read_exact(&mut name).await.unwrap();
-        let got_size  = read_varint_u32(w.get_mut()).await.unwrap();
+        let got_size = read_varint_u32(w.get_mut()).await.unwrap();
 
-        assert_eq!(got_id,   id);
+        assert_eq!(got_id, id);
         assert_eq!(file_type_from_flags(got_flags), 0); // PNG
         assert!(!name.is_empty(), "filename must be non-empty");
         assert_eq!(got_size, data.len() as u32);
@@ -652,10 +699,10 @@ mod server {
 
     #[tokio::test]
     async fn list_empty_catalog() {
-        let addr  = spawn_server(make_catalog(vec![])).await;
+        let addr = spawn_server(make_catalog(vec![])).await;
         let mut w = plain_connect(addr).await;
 
-        write_list_request_buffered(&mut w, 0).await.unwrap();
+        write_list_request_buffered(&mut w, 0, None).await.unwrap();
         w.flush().await.unwrap();
 
         let mut hdr = [0u8; 4];
@@ -670,9 +717,9 @@ mod server {
 
     #[tokio::test]
     async fn get_by_id_jtpd_header_present() {
-        let data  = b"image_bytes".to_vec();
-        let id    = compute_image_id(&data);
-        let addr  = spawn_server(make_catalog(vec![data.clone()])).await;
+        let data = b"image_bytes".to_vec();
+        let id = compute_image_id(&data);
+        let addr = spawn_server(make_catalog(vec![data.clone()])).await;
         let mut w = plain_connect(addr).await;
 
         write_get_request_buffered(&mut w, 0, &[id]).await.unwrap();
@@ -686,9 +733,9 @@ mod server {
 
     #[tokio::test]
     async fn get_by_id_returns_correct_m_count() {
-        let data  = b"pixels".to_vec();
-        let id    = compute_image_id(&data);
-        let addr  = spawn_server(make_catalog(vec![data])).await;
+        let data = b"pixels".to_vec();
+        let id = compute_image_id(&data);
+        let addr = spawn_server(make_catalog(vec![data])).await;
         let mut w = plain_connect(addr).await;
 
         write_get_request_buffered(&mut w, 0, &[id]).await.unwrap();
@@ -704,11 +751,11 @@ mod server {
     #[tokio::test]
     async fn get_by_id_m_less_than_n_for_unknown_ids() {
         // Request 2 IDs; only 1 exists. M must be 1, not 2.
-        let data       = b"real_image".to_vec();
-        let known_id   = compute_image_id(&data);
-        let unknown_id = 0xDEADBEEFu64;
-        let addr       = spawn_server(make_catalog(vec![data])).await;
-        let mut w      = plain_connect(addr).await;
+        let data = b"real_image".to_vec();
+        let known_id = compute_image_id(&data);
+        let unknown_id = 0xdeadbeefu64;
+        let addr = spawn_server(make_catalog(vec![data])).await;
+        let mut w = plain_connect(addr).await;
 
         write_get_request_buffered(&mut w, 0, &[known_id, unknown_id]).await.unwrap();
         w.flush().await.unwrap();
@@ -723,10 +770,10 @@ mod server {
 
     #[tokio::test]
     async fn get_by_id_image_packet_content() {
-        let data   = b"raw_pixel_data".to_vec();
-        let id     = compute_image_id(&data);
-        let addr   = spawn_server(make_catalog(vec![data.clone()])).await;
-        let mut w  = plain_connect(addr).await;
+        let data = b"raw_pixel_data".to_vec();
+        let id = compute_image_id(&data);
+        let addr = spawn_server(make_catalog(vec![data.clone()])).await;
+        let mut w = plain_connect(addr).await;
 
         write_get_request_buffered(&mut w, 0, &[id]).await.unwrap();
         w.flush().await.unwrap();
@@ -737,21 +784,21 @@ mod server {
         let _m = w.get_mut().read_u8().await.unwrap();
 
         // Image packet: Flags (u8) + Length (varint) + ImageID (u64) + Data
-        let flags    = w.get_mut().read_u8().await.unwrap();
-        let length   = read_varint_u32(w.get_mut()).await.unwrap();
-        let got_id   = w.get_mut().read_u64().await.unwrap();
+        let flags = w.get_mut().read_u8().await.unwrap();
+        let length = read_varint_u32(w.get_mut()).await.unwrap();
+        let got_id = w.get_mut().read_u64().await.unwrap();
         let mut body = vec![0u8; length as usize];
         w.get_mut().read_exact(&mut body).await.unwrap();
 
         assert_eq!(got_id, id, "ImageID in packet must match requested ID");
-        assert_eq!(body,   data, "image data must match what was stored");
+        assert_eq!(body, data, "image data must match what was stored");
         assert_eq!(file_type_from_flags(flags), 0); // PNG
     }
 
     #[tokio::test]
     async fn get_by_id_zero_count_returns_jtpd_m0() {
         // N=0: server should still emit JTPD with M=0.
-        let addr  = spawn_server(make_catalog(vec![b"img".to_vec()])).await;
+        let addr = spawn_server(make_catalog(vec![b"img".to_vec()])).await;
         let mut w = plain_connect(addr).await;
 
         write_get_request_buffered(&mut w, 0, &[]).await.unwrap();
@@ -769,7 +816,7 @@ mod server {
 
     #[tokio::test]
     async fn batch_returns_jtpb_header() {
-        let addr  = spawn_server(make_catalog(vec![b"x".to_vec()])).await;
+        let addr = spawn_server(make_catalog(vec![b"x".to_vec()])).await;
         let mut w = plain_connect(addr).await;
 
         write_batch_request_buffered(&mut w, 0, &[]).await.unwrap();
@@ -784,10 +831,10 @@ mod server {
     async fn batch_missing_count_excludes_have_ids() {
         let data_a = b"image_a".to_vec();
         let data_b = b"image_b".to_vec();
-        let id_a   = compute_image_id(&data_a);
-        let id_b   = compute_image_id(&data_b);
-        let addr   = spawn_server(make_catalog(vec![data_a, data_b])).await;
-        let mut w  = plain_connect(addr).await;
+        let id_a = compute_image_id(&data_a);
+        let id_b = compute_image_id(&data_b);
+        let addr = spawn_server(make_catalog(vec![data_a, data_b])).await;
+        let mut w = plain_connect(addr).await;
 
         // Client already has id_a → server should send only image_b.
         write_batch_request_buffered(&mut w, 0, &[id_a]).await.unwrap();
@@ -801,9 +848,9 @@ mod server {
         assert_eq!(missing, 1, "client has 1 of 2 images; missing count must be 1");
 
         // The single returned packet's ImageID must be id_b.
-        let _flags  = w.get_mut().read_u8().await.unwrap();
-        let length  = read_varint_u32(w.get_mut()).await.unwrap();
-        let got_id  = w.get_mut().read_u64().await.unwrap();
+        let _flags = w.get_mut().read_u8().await.unwrap();
+        let length = read_varint_u32(w.get_mut()).await.unwrap();
+        let got_id = w.get_mut().read_u64().await.unwrap();
         assert_eq!(got_id, id_b);
 
         let mut body = vec![0u8; length as usize];
@@ -814,7 +861,7 @@ mod server {
     #[tokio::test]
     async fn batch_all_have_sends_zero_images() {
         let data = b"only_image".to_vec();
-        let id   = compute_image_id(&data);
+        let id = compute_image_id(&data);
         let addr = spawn_server(make_catalog(vec![data])).await;
         let mut w = plain_connect(addr).await;
 
@@ -834,8 +881,8 @@ mod server {
     #[tokio::test]
     async fn list_and_get_header_and_varint_count() {
         let images = vec![b"p".to_vec(), b"qq".to_vec()];
-        let addr   = spawn_server(make_catalog(images)).await;
-        let mut w  = plain_connect(addr).await;
+        let addr = spawn_server(make_catalog(images)).await;
+        let mut w = plain_connect(addr).await;
 
         write_list_and_get_request_buffered(&mut w, 0).await.unwrap();
         w.flush().await.unwrap();
@@ -857,7 +904,7 @@ mod server {
             .into_iter()
             .collect();
 
-        let addr  = spawn_server(make_catalog(vec![data_a, data_b])).await;
+        let addr = spawn_server(make_catalog(vec![data_a, data_b])).await;
         let mut w = plain_connect(addr).await;
 
         write_list_and_get_request_buffered(&mut w, 0).await.unwrap();
@@ -870,8 +917,8 @@ mod server {
         let mut received = HashSet::new();
         for _ in 0..count {
             let _flags = w.get_mut().read_u8().await.unwrap();
-            let len    = read_varint_u32(w.get_mut()).await.unwrap();
-            let id     = w.get_mut().read_u64().await.unwrap();
+            let len = read_varint_u32(w.get_mut()).await.unwrap();
+            let id = w.get_mut().read_u64().await.unwrap();
             let mut body = vec![0u8; len as usize];
             w.get_mut().read_exact(&mut body).await.unwrap();
             received.insert(id);
@@ -884,13 +931,13 @@ mod server {
 
     #[tokio::test]
     async fn keep_alive_allows_multiple_requests() {
-        let data  = b"multi".to_vec();
-        let id    = compute_image_id(&data);
-        let addr  = spawn_server(make_catalog(vec![data])).await;
+        let data = b"multi".to_vec();
+        let id = compute_image_id(&data);
+        let addr = spawn_server(make_catalog(vec![data])).await;
         let mut w = plain_connect(addr).await;
 
         // Request 1: LIST with keep-alive.
-        write_list_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE).await.unwrap();
+        write_list_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, None).await.unwrap();
         w.flush().await.unwrap();
 
         let mut hdr = [0u8; 4];
@@ -899,12 +946,12 @@ mod server {
         let count = read_varint_u32(w.get_mut()).await.unwrap();
         // Drain catalog entries.
         for _ in 0..count {
-            let _id      = w.get_mut().read_u64().await.unwrap();
-            let _flags   = w.get_mut().read_u8().await.unwrap();
+            let _id = w.get_mut().read_u64().await.unwrap();
+            let _flags = w.get_mut().read_u8().await.unwrap();
             let name_len = w.get_mut().read_u16().await.unwrap() as usize;
-            let mut nb   = vec![0u8; name_len];
+            let mut nb = vec![0u8; name_len];
             w.get_mut().read_exact(&mut nb).await.unwrap();
-            let _size    = read_varint_u32(w.get_mut()).await.unwrap();
+            let _size = read_varint_u32(w.get_mut()).await.unwrap();
         }
 
         // Request 2 on the same connection: GET_BY_ID.
@@ -913,7 +960,11 @@ mod server {
 
         let mut hdr2 = [0u8; 4];
         w.get_mut().read_exact(&mut hdr2).await.unwrap();
-        assert_eq!(&hdr2, RESPONSE_GET_BY_ID, "second request must succeed on the kept-alive connection");
+        assert_eq!(
+            &hdr2,
+            RESPONSE_GET_BY_ID,
+            "second request must succeed on the kept-alive connection"
+        );
     }
 
     // ── ImageID verification ──────────────────────────────────────────────────
@@ -921,13 +972,14 @@ mod server {
     #[test]
     fn image_id_verification_detects_corruption() {
         // Simulate what a client does: verify xxHash64(data) == id.
-        let data      = b"genuine_data".to_vec();
-        let id        = compute_image_id(&data);
+        let data = b"genuine_data".to_vec();
+        let id = compute_image_id(&data);
         let corrupted = b"tampered_data".to_vec();
 
         assert_eq!(compute_image_id(&data), id, "known-good data must verify");
         assert_ne!(
-            compute_image_id(&corrupted), id,
+            compute_image_id(&corrupted),
+            id,
             "tampered data must fail ImageID verification"
         );
     }
@@ -945,7 +997,7 @@ mod cancel {
         // CANCEL is only valid on a keep-alive connection (§8.5).
         // Sending it without a prior keep-alive GET_BY_ID should yield JTPE
         // InvalidRequest.
-        let addr  = spawn_server(make_catalog(vec![b"img".to_vec()])).await;
+        let addr = spawn_server(make_catalog(vec![b"img".to_vec()])).await;
         let mut w = plain_connect(addr).await;
 
         // Send CANCEL directly (no keep-alive established).
@@ -963,11 +1015,11 @@ mod cancel {
     #[tokio::test]
     async fn cancel_after_keepalive_returns_jtpc() {
         // Establish keep-alive with LIST, then immediately CANCEL.
-        let addr  = spawn_server(make_catalog(vec![b"img".to_vec()])).await;
+        let addr = spawn_server(make_catalog(vec![b"img".to_vec()])).await;
         let mut w = plain_connect(addr).await;
 
         // LIST with keep-alive to establish the connection as a keep-alive connection.
-        write_list_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE).await.unwrap();
+        write_list_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, None).await.unwrap();
         w.flush().await.unwrap();
 
         // Drain LIST response.
@@ -976,12 +1028,12 @@ mod cancel {
         assert_eq!(&hdr, RESPONSE_LIST);
         let count = read_varint_u32(w.get_mut()).await.unwrap();
         for _ in 0..count {
-            let _id      = w.get_mut().read_u64().await.unwrap();
-            let _fl      = w.get_mut().read_u8().await.unwrap();
-            let nl       = w.get_mut().read_u16().await.unwrap() as usize;
-            let mut nb   = vec![0u8; nl];
+            let _id = w.get_mut().read_u64().await.unwrap();
+            let _fl = w.get_mut().read_u8().await.unwrap();
+            let nl = w.get_mut().read_u16().await.unwrap() as usize;
+            let mut nb = vec![0u8; nl];
             w.get_mut().read_exact(&mut nb).await.unwrap();
-            let _sz      = read_varint_u32(w.get_mut()).await.unwrap();
+            let _sz = read_varint_u32(w.get_mut()).await.unwrap();
         }
 
         // Now send CANCEL.
@@ -1004,7 +1056,7 @@ mod watch {
     #[tokio::test]
     async fn watch_unsupported_when_no_tx() {
         // Server started without --watch → must return JTPE UnsupportedFeature.
-        let addr  = spawn_server(make_catalog(vec![])).await;
+        let addr = spawn_server(make_catalog(vec![])).await;
         let mut w = plain_connect(addr).await;
 
         write_watch_request_buffered(w.get_mut()).await.unwrap();
@@ -1024,19 +1076,19 @@ mod watch {
         // Start a server with a broadcast sender, send a WatchEvent manually,
         // and verify the client receives a JTPW frame.
         let (tx, _rx) = broadcast::channel::<WatchEvent>(16);
-        let tx        = Arc::new(tx);
+        let tx = Arc::new(tx);
         eprintln!("[1/8] Created broadcast channel");
-        
-        let addr      = spawn_server_with_watch(make_catalog(vec![]), Some(Arc::clone(&tx))).await;
+
+        let addr = spawn_server_with_watch(make_catalog(vec![]), Some(Arc::clone(&tx))).await;
         eprintln!("[2/8] Spawned server at {}", addr);
-        
-        let mut w     = plain_connect(addr).await;
+
+        let mut w = plain_connect(addr).await;
         eprintln!("[3/8] Connected to server");
 
         write_watch_request_buffered(w.get_mut()).await.unwrap();
         w.flush().await.unwrap();
         eprintln!("[4/8] Sent WATCH request");
-        
+
         // Yield to allow the spawned server task to run and subscribe to the broadcast
         // channel before we send the event. Without this, the event is sent before
         // the server calls tx.subscribe(), so the event is lost.
@@ -1047,10 +1099,10 @@ mod watch {
 
         // Inject an event from outside (simulates the rescan task).
         let event = WatchEvent {
-            id:       0x1234567890ABCDEFu64,
-            flags:    flags_from_file_type(2), // WebP
+            id: 0x1234567890abcdefu64,
+            flags: flags_from_file_type(2), // WebP
             filename: "new_image.webp".to_string(),
-            size:     2048,
+            size: 2048,
         };
         tx.send(event.clone()).unwrap();
         eprintln!("[5/8] Sent WatchEvent to broadcast channel");
@@ -1061,18 +1113,18 @@ mod watch {
         assert_eq!(&hdr, RESPONSE_WATCH, "server must push JTPW frame");
         eprintln!("[6/8] Received JTPW header");
 
-        let got_id    = w.get_mut().read_u64().await.unwrap();
+        let got_id = w.get_mut().read_u64().await.unwrap();
         let got_flags = w.get_mut().read_u8().await.unwrap();
-        let name_len  = w.get_mut().read_u16().await.unwrap() as usize;
-        let mut name  = vec![0u8; name_len];
+        let name_len = w.get_mut().read_u16().await.unwrap() as usize;
+        let mut name = vec![0u8; name_len];
         w.get_mut().read_exact(&mut name).await.unwrap();
-        let got_name  = String::from_utf8(name).unwrap();
-        let got_size  = read_varint_u32(w.get_mut()).await.unwrap();
+        let got_name = String::from_utf8(name).unwrap();
+        let got_size = read_varint_u32(w.get_mut()).await.unwrap();
 
-        assert_eq!(got_id,    event.id);
+        assert_eq!(got_id, event.id);
         assert_eq!(got_flags, event.flags);
-        assert_eq!(got_name,  event.filename);
-        assert_eq!(got_size,  event.size);
+        assert_eq!(got_name, event.filename);
+        assert_eq!(got_size, event.size);
         eprintln!("[7/8] Verified JTPW event details");
 
         // CANCEL the subscription.
@@ -1084,7 +1136,7 @@ mod watch {
         w.get_mut().read_exact(&mut ack).await.unwrap();
         assert_eq!(&ack, RESPONSE_CANCEL, "WATCH CANCEL must return JTPC");
         eprintln!("[8/8] Received JTPC ack");
-        
+
         eprintln!("[TEST END] watch_receives_jtpw_event_then_cancel completed successfully");
     }
 }
@@ -1100,11 +1152,11 @@ mod error_paths {
 
     #[tokio::test]
     async fn unknown_reqtype_returns_unsupported_feature() {
-        let addr  = spawn_server(make_catalog(vec![])).await;
+        let addr = spawn_server(make_catalog(vec![])).await;
         let mut w = plain_connect(addr).await;
 
         // ReqType 0xFF is not assigned.
-        w.write_all(&[0xFF, 0x00]).await.unwrap();
+        w.write_all(&[0xff, 0x00]).await.unwrap();
         w.flush().await.unwrap();
 
         let mut hdr = [0u8; 4];
@@ -1113,7 +1165,8 @@ mod error_paths {
 
         let (code, _) = jtp::protocol::read_error(w.get_mut()).await.unwrap();
         assert_eq!(
-            code, ErrorCode::UnsupportedFeature,
+            code,
+            ErrorCode::UnsupportedFeature,
             "unknown ReqType must yield UnsupportedFeature, not InvalidRequest"
         );
     }
@@ -1122,11 +1175,11 @@ mod error_paths {
 
     #[tokio::test]
     async fn reserved_request_flags_return_invalid_request() {
-        let addr  = spawn_server(make_catalog(vec![])).await;
+        let addr = spawn_server(make_catalog(vec![])).await;
         let mut w = plain_connect(addr).await;
 
-        // LIST with bit 1 set (reserved).
-        w.write_all(&[REQUEST_LIST, 0b0000_0010]).await.unwrap();
+        // LIST with bit 2 set (reserved).
+        w.write_all(&[REQUEST_LIST, 0b0000_0100]).await.unwrap();
         w.flush().await.unwrap();
 
         let mut hdr = [0u8; 4];
@@ -1139,10 +1192,10 @@ mod error_paths {
 
     #[tokio::test]
     async fn all_reserved_flags_set_returns_invalid_request() {
-        let addr  = spawn_server(make_catalog(vec![])).await;
+        let addr = spawn_server(make_catalog(vec![])).await;
         let mut w = plain_connect(addr).await;
 
-        w.write_all(&[REQUEST_GET_BY_ID, 0xFF]).await.unwrap();
+        w.write_all(&[REQUEST_GET_BY_ID, 0xff]).await.unwrap();
         w.flush().await.unwrap();
 
         let mut hdr = [0u8; 4];
@@ -1157,7 +1210,7 @@ mod error_paths {
 
     #[tokio::test]
     async fn batch_oversized_have_count_returns_invalid_request() {
-        let addr  = spawn_server(make_catalog(vec![])).await;
+        let addr = spawn_server(make_catalog(vec![])).await;
         let mut w = plain_connect(addr).await;
 
         // Build a BATCH request with HaveCount = 1,000,001.
@@ -1185,15 +1238,15 @@ mod error_paths {
     async fn batch_at_limit_is_accepted() {
         // 1,000,000 is the limit; it must be accepted (and return JTPB with 0
         // missing, since no images exist in the catalog that the client lacks).
-        let addr  = spawn_server(make_catalog(vec![b"one".to_vec()])).await;
+        let addr = spawn_server(make_catalog(vec![b"one".to_vec()])).await;
         let mut w = plain_connect(addr).await;
 
         // Build HaveCount = 1,000,000 with 1,000,000 bogus IDs.
         // That's 8 MB of data — acceptable for an integration test.
         let at_limit: u32 = 1_000_000;
-        let mut buf  = vec![REQUEST_BATCH, 0x00];
-        let mut vb   = [0u8; 5];
-        let n        = encode_varint_to_buf(at_limit, &mut vb);
+        let mut buf = vec![REQUEST_BATCH, 0x00];
+        let mut vb = [0u8; 5];
+        let n = encode_varint_to_buf(at_limit, &mut vb);
         buf.extend_from_slice(&vb[..n]);
         for i in 0u32..at_limit {
             buf.extend_from_slice(&(i as u64).to_be_bytes());
@@ -1205,7 +1258,7 @@ mod error_paths {
         // Give the server 10 s to process 8 MB.
         let result = tokio::time::timeout(
             Duration::from_secs(10),
-            w.get_mut().read_exact(&mut hdr),
+            w.get_mut().read_exact(&mut hdr)
         ).await;
         assert!(result.is_ok(), "server timed out processing 1,000,000-entry BATCH");
         assert_eq!(&hdr, RESPONSE_BATCH, "BATCH at limit must succeed with JTPB");
@@ -1215,7 +1268,7 @@ mod error_paths {
 
     #[tokio::test]
     async fn abrupt_disconnect_does_not_panic_server() {
-        let addr  = spawn_server(make_catalog(vec![])).await;
+        let addr = spawn_server(make_catalog(vec![])).await;
         let mut w = plain_connect(addr).await;
 
         // Write only half a LIST request header, then drop the connection.
@@ -1275,17 +1328,21 @@ mod error_paths {
 
 #[cfg(test)]
 async fn test_handle_requests<S: AsyncReadExt + AsyncWriteExt + Unpin>(
-    stream:                BufWriter<S>,
-    catalog:               Arc<RwLock<ImageCatalog>>,
+    stream: BufWriter<S>,
+    catalog: Arc<RwLock<ImageCatalog>>,
     compression_threshold: f32,
-    keep_alive_timeout:    Duration,
-    verbose:               bool,
-    watch_tx:              Option<Arc<broadcast::Sender<WatchEvent>>>,
+    keep_alive_timeout: Duration,
+    verbose: bool,
+    watch_tx: Option<Arc<broadcast::Sender<WatchEvent>>>
 ) {
     jtp::server::handle_requests(
-        stream, catalog, compression_threshold, keep_alive_timeout, verbose, watch_tx,
-    )
-    .await
+        stream,
+        catalog,
+        compression_threshold,
+        keep_alive_timeout,
+        verbose,
+        watch_tx
+    ).await
 }
 
 #[cfg(test)]
@@ -1295,8 +1352,8 @@ async fn spawn_server(catalog: ImageCatalog) -> SocketAddr {
 
 #[cfg(test)]
 async fn spawn_server_with_watch(
-    catalog:  ImageCatalog,
-    watch_tx: Option<Arc<broadcast::Sender<WatchEvent>>>,
+    catalog: ImageCatalog,
+    watch_tx: Option<Arc<broadcast::Sender<WatchEvent>>>
 ) -> SocketAddr {
     let (listener, addr) = bind_ephemeral().await;
     let catalog = Arc::new(RwLock::new(catalog));

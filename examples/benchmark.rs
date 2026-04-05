@@ -8,28 +8,38 @@
 //! Prerequisites:
 //! - JTP server: cargo run --release --bin server -- --images images/
 //! - JTP server (WATCH): cargo run --release --bin server -- --images images/ --watch
-//! - HTTP server: node examples/benchmark/http-server/server.js
+//! - HTTP server: node examples/benchmark/http/server.js
 
 use std::collections::HashSet;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{ Duration, Instant };
 
 use colored::Colorize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::io::{ AsyncReadExt, AsyncWriteExt, BufWriter };
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 
 use jtp::protocol::{
-    read_varint_u32, write_batch_request_buffered, write_cancel_request_buffered,
-    write_get_request_buffered, write_list_and_get_request_buffered,
-    write_list_request_buffered, write_watch_request_buffered, ImageId,
-    REQUEST_FLAG_KEEP_ALIVE, RESPONSE_BATCH, RESPONSE_CANCEL, RESPONSE_GET_BY_ID,
-    RESPONSE_LIST, RESPONSE_LIST_AND_GET, RESPONSE_WATCH,
+    read_varint_u32,
+    write_batch_request_buffered,
+    write_cancel_request_buffered,
+    write_get_request_buffered,
+    write_list_and_get_request_buffered,
+    write_list_request_buffered,
+    write_watch_request_buffered,
+    ImageId,
+    REQUEST_FLAG_KEEP_ALIVE,
+    RESPONSE_BATCH,
+    RESPONSE_CANCEL,
+    RESPONSE_GET_BY_ID,
+    RESPONSE_LIST,
+    RESPONSE_LIST_AND_GET,
+    RESPONSE_WATCH,
 };
 use rustls::client::Resumption;
-use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::pki_types::{ CertificateDer, ServerName };
 use rustls::RootCertStore;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
@@ -40,59 +50,60 @@ use tokio_rustls::TlsConnector;
 
 #[derive(Debug, Clone)]
 struct BenchmarkConfig {
-    jtp_addr:            String,
-    http_addr:           String,
-    cert_path:           String,
-    test_images_dir:     PathBuf,
-    warmup_iterations:   usize,
-    test_iterations:     usize,
-    parallel_workers:    usize,
-    modes:               Vec<BenchmarkMode>,
-    no_tls:              bool, // Use plain TCP for JTP
-    http_tls:            bool, // Use HTTPS for HTTP server (server-https.js)
-    cancel_after:        usize, // CANCEL benchmark: abort after this many packets
-    watch_timeout_ms:    u64,   // WATCH benchmark: wait up to this long for first event
+    jtp_addr: String,
+    http_addr: String,
+    cert_path: String,
+    test_images_dir: PathBuf,
+    warmup_iterations: usize,
+    test_iterations: usize,
+    parallel_workers: usize,
+    modes: Vec<BenchmarkMode>,
+    no_tls: bool, // Use plain TCP for JTP
+    use_quic: bool, // Try QUIC transport first
+    http_tls: bool, // Use HTTPS for HTTP server (server-https.js)
+    cancel_after: usize, // CANCEL benchmark: abort after this many packets
+    watch_timeout_ms: u64, // WATCH benchmark: wait up to this long for first event
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum BenchmarkMode {
     Http,
-    JtpPerImage,    // New connection per image (worst case)
-    JtpBatch,       // Single connection, batch request
-    JtpKeepAlive,   // Reuse connection with keep-alive flag
-    JtpParallel,    // Multiple parallel workers
-    JtpDelta,       // BATCH/delta sync mode
-    JtpListAndGet,  // Combined LIST+GET in single round-trip (fastest)
-    JtpCancel,      // GET_BY_ID with mid-stream CANCEL — measures abort latency
-    JtpWatch,       // WATCH subscription — measures time-to-first-event
+    JtpPerImage, // New connection per image (worst case)
+    JtpBatch, // Single connection, batch request
+    JtpKeepAlive, // Reuse connection with keep-alive flag
+    JtpParallel, // Multiple parallel workers
+    JtpDelta, // BATCH/delta sync mode
+    JtpListAndGet, // Combined LIST+GET in single round-trip (fastest)
+    JtpCancel, // GET_BY_ID with mid-stream CANCEL — measures abort latency
+    JtpWatch, // WATCH subscription — measures time-to-first-event
 }
 
 impl BenchmarkMode {
     fn name(&self) -> &'static str {
         match self {
-            Self::Http         => "HTTP",
-            Self::JtpPerImage  => "JTP Per-Image",
-            Self::JtpBatch     => "JTP Batch",
+            Self::Http => "HTTP",
+            Self::JtpPerImage => "JTP Per-Image",
+            Self::JtpBatch => "JTP Batch",
             Self::JtpKeepAlive => "JTP Keep-Alive",
-            Self::JtpParallel  => "JTP Parallel",
-            Self::JtpDelta     => "JTP Delta",
+            Self::JtpParallel => "JTP Parallel",
+            Self::JtpDelta => "JTP Delta",
             Self::JtpListAndGet => "JTP List+Get",
-            Self::JtpCancel    => "JTP Cancel",
-            Self::JtpWatch     => "JTP Watch",
+            Self::JtpCancel => "JTP Cancel",
+            Self::JtpWatch => "JTP Watch",
         }
     }
 
     fn short_name(&self) -> &'static str {
         match self {
-            Self::Http          => "HTTP",
-            Self::JtpPerImage   => "JTP-1conn",
-            Self::JtpBatch      => "JTP-Batch",
-            Self::JtpKeepAlive  => "JTP-KA",
-            Self::JtpParallel   => "JTP-Par",
-            Self::JtpDelta      => "JTP-Delta",
+            Self::Http => "HTTP",
+            Self::JtpPerImage => "JTP-1conn",
+            Self::JtpBatch => "JTP-Batch",
+            Self::JtpKeepAlive => "JTP-KA",
+            Self::JtpParallel => "JTP-Par",
+            Self::JtpDelta => "JTP-Delta",
             Self::JtpListAndGet => "JTP-L+G",
-            Self::JtpCancel     => "JTP-Cancel",
-            Self::JtpWatch      => "JTP-Watch",
+            Self::JtpCancel => "JTP-Cancel",
+            Self::JtpWatch => "JTP-Watch",
         }
     }
 }
@@ -100,25 +111,26 @@ impl BenchmarkMode {
 impl Default for BenchmarkConfig {
     fn default() -> Self {
         Self {
-            jtp_addr:            "127.0.0.1:8443".to_string(),
-            http_addr:           "http://127.0.0.1:8080".to_string(),
-            cert_path:           "cert.pem".to_string(),
-            test_images_dir:     PathBuf::from("images"),
-            warmup_iterations:   5,
-            test_iterations:     10,
-            parallel_workers:    4,
+            jtp_addr: "127.0.0.1:8443".to_string(),
+            http_addr: "http://127.0.0.1:8080".to_string(),
+            cert_path: "cert.pem".to_string(),
+            test_images_dir: PathBuf::from("images"),
+            warmup_iterations: 5,
+            test_iterations: 10,
+            parallel_workers: 4,
             modes: vec![
                 BenchmarkMode::Http,
                 BenchmarkMode::JtpPerImage,
                 BenchmarkMode::JtpBatch,
                 BenchmarkMode::JtpKeepAlive,
                 BenchmarkMode::JtpParallel,
-                BenchmarkMode::JtpListAndGet,
+                BenchmarkMode::JtpListAndGet
             ],
-            no_tls:              true,  // Plain TCP by default for JTP
-            http_tls:            false, // Plain HTTP by default
-            cancel_after:        1,     // Cancel after the first image packet
-            watch_timeout_ms:    2000,  // Wait up to 2 s for first WATCH event
+            no_tls: true, // Plain TCP by default for JTP
+            use_quic: true, // Try QUIC first; auto-falls back to TCP/TLS
+            http_tls: false, // Plain HTTP by default
+            cancel_after: 1, // Cancel after the first image packet
+            watch_timeout_ms: 2000, // Wait up to 2 s for first WATCH event
         }
     }
 }
@@ -129,16 +141,19 @@ impl Default for BenchmarkConfig {
 
 #[derive(Debug, Clone)]
 struct Stats {
-    mean:    f64,
-    median:  f64,
-    min:     f64,
-    max:     f64,
+    mean: f64,
+    median: f64,
+    min: f64,
+    max: f64,
     std_dev: f64,
 }
 
 impl Stats {
     fn from_durations(durations: &[Duration]) -> Self {
-        let values: Vec<f64> = durations.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
+        let values: Vec<f64> = durations
+            .iter()
+            .map(|d| d.as_secs_f64() * 1000.0)
+            .collect();
         Self::from_values(&values)
     }
 
@@ -151,12 +166,16 @@ impl Stats {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
         let sum: f64 = values.iter().sum();
-        let mean     = sum / (values.len() as f64);
-        let median   = sorted[sorted.len() / 2];
-        let min      = sorted[0];
-        let max      = sorted[sorted.len() - 1];
-        let variance = values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (values.len() as f64);
-        let std_dev  = variance.sqrt();
+        let mean = sum / (values.len() as f64);
+        let median = sorted[sorted.len() / 2];
+        let min = sorted[0];
+        let max = sorted[sorted.len() - 1];
+        let variance =
+            values
+                .iter()
+                .map(|x| (x - mean).powi(2))
+                .sum::<f64>() / (values.len() as f64);
+        let std_dev = variance.sqrt();
 
         Self { mean, median, min, max, std_dev }
     }
@@ -168,12 +187,12 @@ impl Stats {
 
 #[derive(Debug, Clone)]
 struct BenchmarkResult {
-    mode:             BenchmarkMode,
-    durations:        Vec<Duration>,
-    total_bytes:      u64,
+    mode: BenchmarkMode,
+    durations: Vec<Duration>,
+    total_bytes: u64,
     connections_made: usize,
     /// Extra label printed below the result (e.g. "Received M=3 out of N=5")
-    note:             Option<String>,
+    note: Option<String>,
 }
 
 impl BenchmarkResult {
@@ -183,7 +202,9 @@ impl BenchmarkResult {
 
     fn throughput_kbps(&self) -> f64 {
         let stats = self.stats();
-        if stats.mean == 0.0 { return 0.0; }
+        if stats.mean == 0.0 {
+            return 0.0;
+        }
         (self.total_bytes as f64) / 1024.0 / (stats.mean / 1000.0)
     }
 }
@@ -194,13 +215,13 @@ impl BenchmarkResult {
 
 #[derive(Clone, Debug)]
 struct ListedImage {
-    id:       ImageId,
+    id: ImageId,
     #[allow(dead_code)]
-    flags:    u8,
+    flags: u8,
     #[allow(dead_code)]
     filename: String,
     #[allow(dead_code)]
-    size:     u32,
+    size: u32,
 }
 
 // ============================================================================
@@ -225,11 +246,13 @@ impl PlainJtpClient {
     // ── Catalog ──────────────────────────────────────────────────────────────
 
     /// Issue a LIST request and parse the response.
-    async fn list_images(&self) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn list_images(
+        &self
+    ) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
-        write_list_request_buffered(&mut w, 0).await?;
+        write_list_request_buffered(&mut w, 0, None).await?;
         w.flush().await?;
 
         let mut header = [0u8; 4];
@@ -243,23 +266,26 @@ impl PlainJtpClient {
                      Use --tls or start server with --no-tls".into()
                 );
             }
-            return Err(format!(
-                "Invalid LIST response: got {:02x?} (expected JTPL). \
-                 Is server running with --no-tls?", header
-            ).into());
+            return Err(
+                format!(
+                    "Invalid LIST response: got {:02x?} (expected JTPL). \
+                 Is server running with --no-tls?",
+                    header
+                ).into()
+            );
         }
 
         let count = read_varint_u32(w.get_mut()).await? as usize;
         let mut images = Vec::with_capacity(count);
 
         for _ in 0..count {
-            let id       = w.get_mut().read_u64().await?;
-            let flags    = w.get_mut().read_u8().await?;
+            let id = w.get_mut().read_u64().await?;
+            let flags = w.get_mut().read_u8().await?;
             let name_len = w.get_mut().read_u16().await? as usize;
             let mut name = vec![0u8; name_len];
             w.get_mut().read_exact(&mut name).await?;
             let filename = String::from_utf8_lossy(&name).to_string();
-            let size     = read_varint_u32(w.get_mut()).await?;
+            let size = read_varint_u32(w.get_mut()).await?;
             images.push(ListedImage { id, flags, filename, size });
         }
 
@@ -269,10 +295,12 @@ impl PlainJtpClient {
     // ── Image consumption ─────────────────────────────────────────────────────
 
     /// Drain a single image packet from stream; return bytes consumed.
-    async fn consume_image(stream: &mut TcpStream) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        let _flags  = stream.read_u8().await?;
-        let length  = read_varint_u32(stream).await?;
-        let _id     = stream.read_u64().await?;
+    async fn consume_image(
+        stream: &mut TcpStream
+    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let _flags = stream.read_u8().await?;
+        let length = read_varint_u32(stream).await?;
+        let _id = stream.read_u64().await?;
 
         let mut rem = length as usize;
         let mut buf = vec![0u8; 65536];
@@ -288,13 +316,16 @@ impl PlainJtpClient {
     // ── Download modes ────────────────────────────────────────────────────────
 
     /// One connection per image. §9.2: reads JTPD header + M before images.
-    async fn download_per_image(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        let mut total_bytes  = 0u64;
-        let     connections  = ids.len();
+    async fn download_per_image(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let mut total_bytes = 0u64;
+        let connections = ids.len();
 
         for id in ids {
             let stream = self.connect().await?;
-            let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+            let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
             write_get_request_buffered(&mut w, 0, &[*id]).await?;
             w.flush().await?;
@@ -315,9 +346,12 @@ impl PlainJtpClient {
     }
 
     /// Batch all IDs into one GET_BY_ID request. §9.2: reads JTPD header + M.
-    async fn download_batch(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        let stream    = self.connect().await?;
-        let mut w     = BufWriter::with_capacity(64 * 1024, stream);
+    async fn download_batch(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let stream = self.connect().await?;
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
         let mut total = 0u64;
         let mut conns = 1;
 
@@ -325,7 +359,7 @@ impl PlainJtpClient {
             // Only the first chunk reuses the connection opened above.
             if chunk.as_ptr() != ids.as_ptr() {
                 let s = self.connect().await?;
-                w     = BufWriter::with_capacity(64 * 1024, s);
+                w = BufWriter::with_capacity(64 * 1024, s);
                 conns += 1;
             }
 
@@ -348,9 +382,12 @@ impl PlainJtpClient {
     }
 
     /// Keep-alive across chunks. §9.2: reads JTPD header + M per chunk.
-    async fn download_keepalive(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_keepalive(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
         let mut total = 0u64;
 
         for chunk in ids.chunks(255) {
@@ -374,55 +411,66 @@ impl PlainJtpClient {
 
     /// Parallel workers, each using keep-alive for their sub-slice of IDs.
     /// §9.2: each worker reads JTPD header + M per chunk.
-    async fn download_parallel(&self, ids: &[ImageId], num_workers: usize) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_parallel(
+        &self,
+        ids: &[ImageId],
+        num_workers: usize
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let chunk_size = (ids.len() + num_workers - 1) / num_workers;
-        let semaphore  = Arc::new(Semaphore::new(num_workers));
-        let addr       = self.addr.clone();
+        let semaphore = Arc::new(Semaphore::new(num_workers));
+        let addr = self.addr.clone();
         let mut handles = Vec::new();
 
         for chunk in ids.chunks(chunk_size) {
-            let chunk     = chunk.to_vec();
-            let sem       = Arc::clone(&semaphore);
-            let addr      = addr.clone();
+            let chunk = chunk.to_vec();
+            let sem = Arc::clone(&semaphore);
+            let addr = addr.clone();
 
-            handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
-                let tcp     = TcpStream::connect(&addr).await?;
-                tcp.set_nodelay(true)?;
-                let mut w   = BufWriter::with_capacity(64 * 1024, tcp);
-                let mut bytes = 0u64;
+            handles.push(
+                tokio::spawn(async move {
+                    let _permit = sem.acquire().await.unwrap();
+                    let tcp = TcpStream::connect(&addr).await?;
+                    tcp.set_nodelay(true)?;
+                    let mut w = BufWriter::with_capacity(64 * 1024, tcp);
+                    let mut bytes = 0u64;
 
-                for sub in chunk.chunks(255) {
-                    write_get_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, sub).await?;
-                    w.flush().await?;
+                    for sub in chunk.chunks(255) {
+                        write_get_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, sub).await?;
+                        w.flush().await?;
 
-                    // §9.2: read JTPD header + M count
-                    let mut hdr = [0u8; 4];
-                    w.get_mut().read_exact(&mut hdr).await?;
-                    if &hdr != RESPONSE_GET_BY_ID {
-                        return Err::<_, Box<dyn std::error::Error + Send + Sync>>(
-                            format!("unexpected GET_BY_ID header: {:?}", hdr).into()
-                        );
+                        // §9.2: read JTPD header + M count
+                        let mut hdr = [0u8; 4];
+                        w.get_mut().read_exact(&mut hdr).await?;
+                        if &hdr != RESPONSE_GET_BY_ID {
+                            return Err::<_, Box<dyn std::error::Error + Send + Sync>>(
+                                format!("unexpected GET_BY_ID header: {:?}", hdr).into()
+                            );
+                        }
+                        let m = w.get_mut().read_u8().await? as usize;
+                        for _ in 0..m {
+                            bytes += PlainJtpClient::consume_image(w.get_mut()).await?;
+                        }
                     }
-                    let m = w.get_mut().read_u8().await? as usize;
-                    for _ in 0..m {
-                        bytes += PlainJtpClient::consume_image(w.get_mut()).await?;
-                    }
-                }
 
-                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
-            }));
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
+                })
+            );
         }
 
         let mut total = 0u64;
-        for h in handles { total += h.await??; }
+        for h in handles {
+            total += h.await??;
+        }
         Ok((total, num_workers))
     }
 
     /// Delta sync: client sends have-IDs, server returns only missing images.
-    async fn download_delta(&self, have_ids: &[ImageId]) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_delta(
+        &self,
+        have_ids: &[ImageId]
+    ) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         write_batch_request_buffered(&mut w, 0, have_ids).await?;
         w.flush().await?;
@@ -443,9 +491,11 @@ impl PlainJtpClient {
     }
 
     /// Combined LIST + GET in a single round-trip.
-    async fn download_list_and_get(&self) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_list_and_get(
+        &self
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         write_list_and_get_request_buffered(&mut w, 0).await?;
         w.flush().await?;
@@ -472,8 +522,8 @@ impl PlainJtpClient {
     /// Measures the round-trip from CANCEL transmission to JTPC receipt.
     async fn download_with_cancel(
         &self,
-        ids:          &[ImageId],
-        cancel_after: usize,
+        ids: &[ImageId],
+        cancel_after: usize
     ) -> Result<(u64, Duration, usize), Box<dyn std::error::Error + Send + Sync>> {
         if ids.is_empty() {
             return Ok((0, Duration::ZERO, 0));
@@ -481,7 +531,7 @@ impl PlainJtpClient {
 
         let chunk: &[ImageId] = &ids[..ids.len().min(255)];
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         // Keep-alive so we can send CANCEL after the first few images.
         write_get_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, chunk).await?;
@@ -543,10 +593,10 @@ impl PlainJtpClient {
     /// with --watch so it periodically rescans the images directory.
     async fn watch_time_to_first_event(
         &self,
-        timeout: Duration,
+        timeout: Duration
     ) -> Result<Duration, Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         write_watch_request_buffered(w.get_mut()).await?;
         w.flush().await?;
@@ -565,26 +615,32 @@ impl PlainJtpClient {
             }
 
             // Drain the event fields (id + flags + name_len + name + size).
-            let _id       = w.get_mut().read_u64().await?;
-            let _flags    = w.get_mut().read_u8().await?;
-            let name_len  = w.get_mut().read_u16().await? as usize;
-            let mut name  = vec![0u8; name_len];
+            let _id = w.get_mut().read_u64().await?;
+            let _flags = w.get_mut().read_u8().await?;
+            let name_len = w.get_mut().read_u16().await? as usize;
+            let mut name = vec![0u8; name_len];
             w.get_mut().read_exact(&mut name).await?;
-            let _size     = read_varint_u32(w.get_mut()).await?;
+            let _size = read_varint_u32(w.get_mut()).await?;
 
             Ok(())
-        })
-        .await;
+        }).await;
 
         let elapsed = start.elapsed();
 
         match result {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_)     => return Err(format!(
-                "No WATCH event received within {:?}. \
-                 Is the server running with --watch?", timeout
-            ).into()),
+            Ok(Err(e)) => {
+                return Err(e);
+            }
+            Err(_) => {
+                return Err(
+                    format!(
+                        "No WATCH event received within {:?}. \
+                 Is the server running with --watch?",
+                        timeout
+                    ).into()
+                );
+            }
         }
 
         // Cancel the subscription so the connection closes cleanly.
@@ -596,85 +652,692 @@ impl PlainJtpClient {
 }
 
 // ============================================================================
-// JTP client wrapper — handles both plain TCP and TLS transparently
+// ============================================================================
+// QUIC support — adapters + QuicJtpClient
+// ============================================================================
+
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+const ALPN_JTP: &[u8] = b"jtp/1";
+
+// ── AsyncWrite adapter for quinn::SendStream ──────────────────────────────────
+
+use std::pin::Pin;
+use std::task::{ Context, Poll };
+use tokio::io::{ AsyncRead, AsyncWrite, ReadBuf };
+use quinn::{
+    ClientConfig as QuinnClientConfig,
+    Connection,
+    Endpoint,
+    RecvStream,
+    SendStream,
+    TransportConfig,
+};
+
+struct QuicSendAdapter<'a>(&'a mut SendStream);
+
+impl<'a> AsyncWrite for QuicSendAdapter<'a> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8]
+    ) -> Poll<std::io::Result<usize>> {
+        match Pin::new(&mut *self.get_mut().0).poll_write(cx, buf) {
+            Poll::Ready(Ok(n)) => Poll::Ready(Ok(n)),
+            Poll::Ready(Err(e)) =>
+                Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match Pin::new(&mut *self.get_mut().0).poll_flush(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(e)) =>
+                Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match Pin::new(&mut *self.get_mut().0).poll_shutdown(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(e)) =>
+                Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+// ── AsyncRead adapter for quinn::RecvStream ───────────────────────────────────
+
+struct QuicRecvAdapter<'a>(&'a mut RecvStream);
+
+impl<'a> AsyncRead for QuicRecvAdapter<'a> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut *self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+// ── QuicStream: bidi QUIC stream ──────────────────────────────────────────────
+
+struct QuicStream {
+    send: SendStream,
+    recv: RecvStream,
+}
+
+impl QuicStream {
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), BoxError> {
+        self.recv.read_exact(buf).await.map_err(Into::into)
+    }
+    async fn read_u8(&mut self) -> Result<u8, BoxError> {
+        let mut b = [0u8; 1];
+        self.read_exact(&mut b).await?;
+        Ok(b[0])
+    }
+    async fn read_u16(&mut self) -> Result<u16, BoxError> {
+        let mut b = [0u8; 2];
+        self.read_exact(&mut b).await?;
+        Ok(u16::from_be_bytes(b))
+    }
+    async fn read_u64(&mut self) -> Result<u64, BoxError> {
+        let mut b = [0u8; 8];
+        self.read_exact(&mut b).await?;
+        Ok(u64::from_be_bytes(b))
+    }
+}
+
+async fn quic_read_varint(s: &mut QuicStream) -> Result<u32, BoxError> {
+    let mut adapter = QuicRecvAdapter(&mut s.recv);
+    read_varint_u32(&mut adapter).await.map_err(Into::into)
+}
+
+// ── QuicJtpClient ─────────────────────────────────────────────────────────────
+
+struct QuicJtpClient {
+    connection: Connection,
+}
+
+impl QuicJtpClient {
+    async fn new(addr: &str, cert_path: &str) -> Result<Self, BoxError> {
+        let cert_bytes = tokio::fs::read(cert_path).await?;
+        let certs: Vec<CertificateDer<'static>> = {
+            let mut r = BufReader::new(std::io::Cursor::new(cert_bytes));
+            rustls_pemfile::certs(&mut r).collect::<Result<Vec<_>, _>>()?
+        };
+        let mut store = RootCertStore::empty();
+        for cert in certs {
+            store.add(cert)?;
+        }
+        let mut tls = rustls::ClientConfig
+            ::builder()
+            .with_root_certificates(store)
+            .with_no_client_auth();
+        tls.alpn_protocols = vec![ALPN_JTP.to_vec()];
+        Self::connect_inner(addr, Arc::new(tls)).await
+    }
+
+    async fn new_insecure(addr: &str) -> Result<Self, BoxError> {
+        let mut tls = rustls::ClientConfig
+            ::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(QuicNoCertVerification))
+            .with_no_client_auth();
+        tls.alpn_protocols = vec![ALPN_JTP.to_vec()];
+        Self::connect_inner(addr, Arc::new(tls)).await
+    }
+
+    async fn connect_inner(addr: &str, tls: Arc<rustls::ClientConfig>) -> Result<Self, BoxError> {
+        let socket_addr: std::net::SocketAddr = addr.parse()?;
+        let local: std::net::SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let mut transport = TransportConfig::default();
+        transport.max_idle_timeout(Some(Duration::from_secs(30).try_into()?));
+        transport.keep_alive_interval(Some(Duration::from_secs(5)));
+        let mut qcfg = QuinnClientConfig::new(
+            Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(tls)?)
+        );
+        qcfg.transport_config(Arc::new(transport));
+        let mut ep = Endpoint::client(local)?;
+        ep.set_default_client_config(qcfg);
+        let conn = ep.connect(socket_addr, "localhost")?.await?;
+        Ok(Self { connection: conn })
+    }
+
+    async fn open_stream(&self) -> Result<QuicStream, BoxError> {
+        let (send, recv) = self.connection.open_bi().await?;
+        Ok(QuicStream { send, recv })
+    }
+
+    async fn consume_image(s: &mut QuicStream) -> Result<u64, BoxError> {
+        let _flags = s.read_u8().await?;
+        let length = quic_read_varint(s).await?;
+        let _id = s.read_u64().await?;
+        let mut rem = length as usize;
+        let mut buf = vec![0u8; 65536];
+        while rem > 0 {
+            let n = rem.min(buf.len());
+            s.read_exact(&mut buf[..n]).await?;
+            rem -= n;
+        }
+        Ok(length as u64)
+    }
+
+    async fn list_images(
+        &self
+    ) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut s = self.open_stream().await?;
+        {
+            let mut bw = BufWriter::with_capacity(64, QuicSendAdapter(&mut s.send));
+            write_list_request_buffered(&mut bw, 0, None).await?;
+            bw.flush().await?;
+        }
+        s.send.finish()?;
+        let mut hdr = [0u8; 4];
+        s.read_exact(&mut hdr).await?;
+        if &hdr != RESPONSE_LIST {
+            return Err(format!("invalid LIST response: {:02x?}", hdr).into());
+        }
+        let count = quic_read_varint(&mut s).await? as usize;
+        let mut images = Vec::with_capacity(count);
+        for _ in 0..count {
+            let id = s.read_u64().await?;
+            let flags = s.read_u8().await?;
+            let name_len = s.read_u16().await? as usize;
+            let mut name = vec![0u8; name_len];
+            s.read_exact(&mut name).await?;
+            let filename = String::from_utf8_lossy(&name).to_string();
+            let size = quic_read_varint(&mut s).await?;
+            images.push(ListedImage { id, flags, filename, size });
+        }
+        Ok(images)
+    }
+
+    async fn download_per_image(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let mut total = 0u64;
+        for id in ids {
+            let mut s = self.open_stream().await?;
+            {
+                let mut bw = BufWriter::with_capacity(256, QuicSendAdapter(&mut s.send));
+                write_get_request_buffered(&mut bw, 0, &[*id]).await?;
+                bw.flush().await?;
+            }
+            s.send.finish()?;
+            let mut hdr = [0u8; 4];
+            s.read_exact(&mut hdr).await?;
+            if &hdr != RESPONSE_GET_BY_ID {
+                return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
+            }
+            let m = s.read_u8().await? as usize;
+            for _ in 0..m {
+                total += Self::consume_image(&mut s).await?;
+            }
+        }
+        Ok((total, ids.len()))
+    }
+
+    async fn download_batch(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let mut total = 0u64;
+        let mut conns = 0usize;
+        for chunk in ids.chunks(255) {
+            let mut s = self.open_stream().await?;
+            conns += 1;
+            {
+                let mut bw = BufWriter::with_capacity(64 * 1024, QuicSendAdapter(&mut s.send));
+                write_get_request_buffered(&mut bw, 0, chunk).await?;
+                bw.flush().await?;
+            }
+            s.send.finish()?;
+            let mut hdr = [0u8; 4];
+            s.read_exact(&mut hdr).await?;
+            if &hdr != RESPONSE_GET_BY_ID {
+                return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
+            }
+            let m = s.read_u8().await? as usize;
+            for _ in 0..m {
+                total += Self::consume_image(&mut s).await?;
+            }
+        }
+        Ok((total, conns))
+    }
+
+    async fn download_keepalive(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let mut s = self.open_stream().await?;
+        let mut total = 0u64;
+        for chunk in ids.chunks(255) {
+            {
+                let mut bw = BufWriter::with_capacity(64 * 1024, QuicSendAdapter(&mut s.send));
+                write_get_request_buffered(&mut bw, REQUEST_FLAG_KEEP_ALIVE, chunk).await?;
+                bw.flush().await?;
+            }
+            let mut hdr = [0u8; 4];
+            s.read_exact(&mut hdr).await?;
+            if &hdr != RESPONSE_GET_BY_ID {
+                return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
+            }
+            let m = s.read_u8().await? as usize;
+            for _ in 0..m {
+                total += Self::consume_image(&mut s).await?;
+            }
+        }
+        Ok((total, 1))
+    }
+
+    async fn download_parallel(
+        &self,
+        ids: &[ImageId],
+        num_workers: usize
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let chunk_size = (ids.len() + num_workers - 1) / num_workers;
+        let semaphore = Arc::new(Semaphore::new(num_workers));
+        let mut handles = Vec::new();
+        for chunk in ids.chunks(chunk_size) {
+            let chunk = chunk.to_vec();
+            let sem = Arc::clone(&semaphore);
+            let conn = self.connection.clone();
+            handles.push(
+                tokio::spawn(async move {
+                    let _permit = sem.acquire().await.unwrap();
+                    let (mut send, mut recv) = conn.open_bi().await?;
+                    let mut bytes = 0u64;
+                    for sub in chunk.chunks(255) {
+                        {
+                            let mut bw = BufWriter::with_capacity(
+                                64 * 1024,
+                                QuicSendAdapter(&mut send)
+                            );
+                            write_get_request_buffered(
+                                &mut bw,
+                                REQUEST_FLAG_KEEP_ALIVE,
+                                sub
+                            ).await?;
+                            bw.flush().await?;
+                        }
+                        let mut hdr = [0u8; 4];
+                        recv.read_exact(&mut hdr).await.map_err(BoxError::from)?;
+                        if &hdr != RESPONSE_GET_BY_ID {
+                            return Err::<_, BoxError>(
+                                format!("unexpected GET_BY_ID header: {:?}", hdr).into()
+                            );
+                        }
+                        let m = recv.read_u8().await.map_err(BoxError::from)? as usize;
+                        for _ in 0..m {
+                            let _flags = recv.read_u8().await.map_err(BoxError::from)?;
+                            let length = {
+                                let mut a = QuicRecvAdapter(&mut recv);
+                                read_varint_u32(&mut a).await.map_err(BoxError::from)?
+                            };
+                            let _id = recv.read_u64().await.map_err(BoxError::from)?;
+                            let mut rem = length as usize;
+                            let mut buf = vec![0u8; 65536];
+                            while rem > 0 {
+                                let n = rem.min(buf.len());
+                                recv.read_exact(&mut buf[..n]).await.map_err(BoxError::from)?;
+                                rem -= n;
+                            }
+                            bytes += length as u64;
+                        }
+                    }
+                    Ok::<_, BoxError>(bytes)
+                })
+            );
+        }
+        let mut total = 0u64;
+        for h in handles {
+            total += h.await??;
+        }
+        Ok((total, num_workers))
+    }
+
+    async fn download_delta(
+        &self,
+        have_ids: &[ImageId]
+    ) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let mut s = self.open_stream().await?;
+        {
+            let mut bw = BufWriter::with_capacity(64 * 1024, QuicSendAdapter(&mut s.send));
+            write_batch_request_buffered(&mut bw, 0, have_ids).await?;
+            bw.flush().await?;
+        }
+        s.send.finish()?;
+        let mut hdr = [0u8; 4];
+        s.read_exact(&mut hdr).await?;
+        if &hdr != RESPONSE_BATCH {
+            return Err(format!("unexpected BATCH header: {:?}", hdr).into());
+        }
+        let missing = quic_read_varint(&mut s).await? as usize;
+        let mut total = 0u64;
+        for _ in 0..missing {
+            total += Self::consume_image(&mut s).await?;
+        }
+        Ok((total, 1, missing))
+    }
+
+    async fn download_list_and_get(
+        &self
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let mut s = self.open_stream().await?;
+        {
+            let mut bw = BufWriter::with_capacity(256, QuicSendAdapter(&mut s.send));
+            write_list_and_get_request_buffered(&mut bw, 0).await?;
+            bw.flush().await?;
+        }
+        s.send.finish()?;
+        let mut hdr = [0u8; 4];
+        s.read_exact(&mut hdr).await?;
+        if &hdr != RESPONSE_LIST_AND_GET {
+            return Err(format!("unexpected LIST_AND_GET header: {:?}", hdr).into());
+        }
+        let count = quic_read_varint(&mut s).await? as usize;
+        let mut total = 0u64;
+        for _ in 0..count {
+            total += Self::consume_image(&mut s).await?;
+        }
+        Ok((total, 1))
+    }
+
+    async fn download_with_cancel(
+        &self,
+        ids: &[ImageId],
+        cancel_after: usize
+    ) -> Result<(u64, Duration, usize), Box<dyn std::error::Error + Send + Sync>> {
+        if ids.is_empty() {
+            return Ok((0, Duration::ZERO, 0));
+        }
+        let chunk = &ids[..ids.len().min(255)];
+        let mut s = self.open_stream().await?;
+        {
+            let mut bw = BufWriter::with_capacity(64 * 1024, QuicSendAdapter(&mut s.send));
+            write_get_request_buffered(&mut bw, REQUEST_FLAG_KEEP_ALIVE, chunk).await?;
+            bw.flush().await?;
+        }
+        let mut hdr = [0u8; 4];
+        s.read_exact(&mut hdr).await?;
+        if &hdr != RESPONSE_GET_BY_ID {
+            return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
+        }
+        let m = s.read_u8().await? as usize;
+        let received = cancel_after.min(m);
+        let mut bytes_before = 0u64;
+        for _ in 0..received {
+            bytes_before += Self::consume_image(&mut s).await?;
+        }
+        let cancel_start = Instant::now();
+        {
+            let mut bw = BufWriter::with_capacity(16, QuicSendAdapter(&mut s.send));
+            write_cancel_request_buffered(&mut bw).await?;
+            bw.flush().await?;
+        }
+        let mut ack_buf = [0u8; 4];
+        let mut pos = 0;
+        while pos < 4 {
+            let b = s.read_u8().await?;
+            if pos == 0 && b != RESPONSE_CANCEL[0] {
+                continue;
+            }
+            if b == RESPONSE_CANCEL[pos] {
+                ack_buf[pos] = b;
+                pos += 1;
+            } else {
+                pos = 0;
+            }
+        }
+        let cancel_rtt = cancel_start.elapsed();
+        if &ack_buf != RESPONSE_CANCEL {
+            return Err(format!("unexpected CANCEL ack: {:?}", ack_buf).into());
+        }
+        Ok((bytes_before, cancel_rtt, received))
+    }
+
+    async fn watch_time_to_first_event(
+        &self,
+        timeout: Duration
+    ) -> Result<Duration, Box<dyn std::error::Error + Send + Sync>> {
+        let mut s = self.open_stream().await?;
+        {
+            let mut bw = BufWriter::with_capacity(16, QuicSendAdapter(&mut s.send));
+            write_watch_request_buffered(&mut bw).await?;
+            bw.flush().await?;
+        }
+        let start = Instant::now();
+        let result = tokio::time::timeout(timeout, async {
+            let mut hdr = [0u8; 4];
+            s.read_exact(&mut hdr).await?;
+            if &hdr != RESPONSE_WATCH {
+                return Err::<_, BoxError>(format!("unexpected WATCH frame: {:?}", hdr).into());
+            }
+            let _id = s.read_u64().await?;
+            let _flags = s.read_u8().await?;
+            let name_len = s.read_u16().await? as usize;
+            let mut name = vec![0u8; name_len];
+            s.read_exact(&mut name).await?;
+            let _size = quic_read_varint(&mut s).await?;
+            Ok(())
+        }).await;
+        let elapsed = start.elapsed();
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return Err(e);
+            }
+            Err(_) => {
+                return Err(
+                    format!(
+                        "No WATCH event within {:?}. Is server running with --watch?",
+                        timeout
+                    ).into()
+                );
+            }
+        }
+        let _ = (async {
+            let mut bw = BufWriter::with_capacity(16, QuicSendAdapter(&mut s.send));
+            write_cancel_request_buffered(&mut bw).await?;
+            bw.flush().await
+        }).await;
+        Ok(elapsed)
+    }
+}
+
+// ── NoCertVerification for QUIC dev/fallback ──────────────────────────────────
+
+#[derive(Debug)]
+struct QuicNoCertVerification;
+
+impl rustls::client::danger::ServerCertVerifier for QuicNoCertVerification {
+    fn verify_server_cert(
+        &self,
+        _: &CertificateDer,
+        _: &[CertificateDer],
+        _: &ServerName,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &CertificateDer,
+        _: &rustls::DigitallySignedStruct
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+    fn verify_tls13_signature(
+        &self,
+        _: &[u8],
+        _: &CertificateDer,
+        _: &rustls::DigitallySignedStruct
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring
+            ::default_provider()
+            .signature_verification_algorithms.supported_schemes()
+    }
+}
+
+// ============================================================================
+// JTP client wrapper — handles QUIC, plain TCP, and TLS transparently
 // ============================================================================
 
 enum JtpClientWrapper {
     Plain(PlainJtpClient),
     Tls(TlsJtpClient),
+    Quic(QuicJtpClient),
 }
 
 impl JtpClientWrapper {
-    /// Try plain TCP first; fall back to TLS based on what the server responds.
+    /// Try QUIC first; fall back to plain TCP then TLS detection.
     async fn auto_detect(
-        addr:      &str,
+        addr: &str,
         cert_path: &str,
+        use_quic: bool
     ) -> Result<(Self, bool), Box<dyn std::error::Error + Send + Sync>> {
+        if use_quic {
+            let quic_result = if let Ok(c) = QuicJtpClient::new(addr, cert_path).await {
+                Ok(c)
+            } else {
+                QuicJtpClient::new_insecure(addr).await
+            };
+            if let Ok(client) = quic_result {
+                return Ok((Self::Quic(client), false));
+            }
+            // Fall through to TCP/TLS if QUIC unavailable
+        }
+
         let tcp = TcpStream::connect(addr).await?;
         tcp.set_nodelay(true)?;
         let mut w = BufWriter::with_capacity(64 * 1024, tcp);
-
-        write_list_request_buffered(&mut w, 0).await?;
+        write_list_request_buffered(&mut w, 0, None).await?;
         w.flush().await?;
-
         let mut header = [0u8; 4];
         w.get_mut().read_exact(&mut header).await?;
 
-        // §9.1 header is "JTPL" → plain TCP is working.
         if &header == RESPONSE_LIST {
             drop(w);
             return Ok((Self::Plain(PlainJtpClient::new(addr)), false));
         }
-
-        // TLS alert/handshake/app-data bytes → try TLS.
         if matches!(header[0], 0x15 | 0x16 | 0x17) {
             drop(w);
             let client = TlsJtpClient::new(addr, cert_path).await?;
             return Ok((Self::Tls(client), true));
         }
-
-        Err(format!(
-            "Unrecognised server response: {:02x?}. \
-             Expected JTPL or TLS handshake.", header
-        ).into())
+        Err(
+            format!(
+                "Unrecognised server response: {:02x?}. Expected JTPL or TLS handshake.",
+                header
+            ).into()
+        )
     }
 
-    // ── Forwarding methods ────────────────────────────────────────────────────
-
-    async fn list_images(&self) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.list_images().await, Self::Tls(c) => c.list_images().await }
+    async fn list_images(
+        &self
+    ) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.list_images().await,
+            Self::Tls(c) => c.list_images().await,
+            Self::Quic(c) => c.list_images().await,
+        }
     }
 
-    async fn download_per_image(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.download_per_image(ids).await, Self::Tls(c) => c.download_per_image(ids).await }
+    async fn download_per_image(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.download_per_image(ids).await,
+            Self::Tls(c) => c.download_per_image(ids).await,
+            Self::Quic(c) => c.download_per_image(ids).await,
+        }
     }
 
-    async fn download_batch(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.download_batch(ids).await, Self::Tls(c) => c.download_batch(ids).await }
+    async fn download_batch(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.download_batch(ids).await,
+            Self::Tls(c) => c.download_batch(ids).await,
+            Self::Quic(c) => c.download_batch(ids).await,
+        }
     }
 
-    async fn download_keepalive(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.download_keepalive(ids).await, Self::Tls(c) => c.download_keepalive(ids).await }
+    async fn download_keepalive(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.download_keepalive(ids).await,
+            Self::Tls(c) => c.download_keepalive(ids).await,
+            Self::Quic(c) => c.download_keepalive(ids).await,
+        }
     }
 
-    async fn download_parallel(&self, ids: &[ImageId], workers: usize) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.download_parallel(ids, workers).await, Self::Tls(c) => c.download_parallel(ids, workers).await }
+    async fn download_parallel(
+        &self,
+        ids: &[ImageId],
+        workers: usize
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.download_parallel(ids, workers).await,
+            Self::Tls(c) => c.download_parallel(ids, workers).await,
+            Self::Quic(c) => c.download_parallel(ids, workers).await,
+        }
     }
 
-    async fn download_delta(&self, have: &[ImageId]) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.download_delta(have).await, Self::Tls(c) => c.download_delta(have).await }
+    async fn download_delta(
+        &self,
+        have: &[ImageId]
+    ) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.download_delta(have).await,
+            Self::Tls(c) => c.download_delta(have).await,
+            Self::Quic(c) => c.download_delta(have).await,
+        }
     }
 
-    async fn download_list_and_get(&self) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.download_list_and_get().await, Self::Tls(c) => c.download_list_and_get().await }
+    async fn download_list_and_get(
+        &self
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.download_list_and_get().await,
+            Self::Tls(c) => c.download_list_and_get().await,
+            Self::Quic(c) => c.download_list_and_get().await,
+        }
     }
 
-    async fn download_with_cancel(&self, ids: &[ImageId], cancel_after: usize) -> Result<(u64, Duration, usize), Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.download_with_cancel(ids, cancel_after).await, Self::Tls(c) => c.download_with_cancel(ids, cancel_after).await }
+    async fn download_with_cancel(
+        &self,
+        ids: &[ImageId],
+        cancel_after: usize
+    ) -> Result<(u64, Duration, usize), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.download_with_cancel(ids, cancel_after).await,
+            Self::Tls(c) => c.download_with_cancel(ids, cancel_after).await,
+            Self::Quic(c) => c.download_with_cancel(ids, cancel_after).await,
+        }
     }
 
-    async fn watch_time_to_first_event(&self, timeout: Duration) -> Result<Duration, Box<dyn std::error::Error + Send + Sync>> {
-        match self { Self::Plain(c) => c.watch_time_to_first_event(timeout).await, Self::Tls(c) => c.watch_time_to_first_event(timeout).await }
+    async fn watch_time_to_first_event(
+        &self,
+        timeout: Duration
+    ) -> Result<Duration, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Plain(c) => c.watch_time_to_first_event(timeout).await,
+            Self::Tls(c) => c.watch_time_to_first_event(timeout).await,
+            Self::Quic(c) => c.watch_time_to_first_event(timeout).await,
+        }
     }
 }
 
@@ -683,33 +1346,42 @@ impl JtpClientWrapper {
 // ============================================================================
 
 struct TlsJtpClient {
-    connector:   TlsConnector,
-    addr:        String,
+    connector: TlsConnector,
+    addr: String,
     server_name: ServerName<'static>,
 }
 
 impl TlsJtpClient {
-    async fn new(addr: &str, cert_path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    async fn new(
+        addr: &str,
+        cert_path: &str
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let cert_bytes = tokio::fs::read(cert_path).await?;
         let certs: Vec<CertificateDer<'static>> = {
             let mut r = BufReader::new(std::io::Cursor::new(cert_bytes));
             rustls_pemfile::certs(&mut r).collect::<Result<Vec<_>, _>>()?
         };
         let mut store = RootCertStore::empty();
-        for cert in certs { store.add(cert)?; }
+        for cert in certs {
+            store.add(cert)?;
+        }
 
-        let mut config = rustls::ClientConfig::builder()
+        let mut config = rustls::ClientConfig
+            ::builder()
             .with_root_certificates(store)
             .with_no_client_auth();
-        config.resumption =
-            Resumption::default().tls12_resumption(rustls::client::Tls12Resumption::SessionIdOrTickets);
+        config.resumption = Resumption::default().tls12_resumption(
+            rustls::client::Tls12Resumption::SessionIdOrTickets
+        );
 
-        let connector   = TlsConnector::from(Arc::new(config));
+        let connector = TlsConnector::from(Arc::new(config));
         let server_name = ServerName::try_from("localhost".to_string())?;
         Ok(Self { connector, addr: addr.to_string(), server_name })
     }
 
-    async fn connect(&self) -> Result<TlsStream<TcpStream>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn connect(
+        &self
+    ) -> Result<TlsStream<TcpStream>, Box<dyn std::error::Error + Send + Sync>> {
         let tcp = TcpStream::connect(&self.addr).await?;
         tcp.set_nodelay(true)?;
         Ok(self.connector.connect(self.server_name.clone(), tcp).await?)
@@ -717,11 +1389,13 @@ impl TlsJtpClient {
 
     // ── Catalog ───────────────────────────────────────────────────────────────
 
-    async fn list_images(&self) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn list_images(
+        &self
+    ) -> Result<Vec<ListedImage>, Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
-        write_list_request_buffered(&mut w, 0).await?;
+        write_list_request_buffered(&mut w, 0, None).await?;
         w.flush().await?;
 
         let mut hdr = [0u8; 4];
@@ -734,13 +1408,13 @@ impl TlsJtpClient {
         let mut images = Vec::with_capacity(count);
 
         for _ in 0..count {
-            let id       = w.get_mut().read_u64().await?;
-            let flags    = w.get_mut().read_u8().await?;
+            let id = w.get_mut().read_u64().await?;
+            let flags = w.get_mut().read_u8().await?;
             let name_len = w.get_mut().read_u16().await? as usize;
             let mut name = vec![0u8; name_len];
             w.get_mut().read_exact(&mut name).await?;
             let filename = String::from_utf8_lossy(&name).to_string();
-            let size     = read_varint_u32(w.get_mut()).await?;
+            let size = read_varint_u32(w.get_mut()).await?;
             images.push(ListedImage { id, flags, filename, size });
         }
 
@@ -749,10 +1423,12 @@ impl TlsJtpClient {
 
     // ── Image consumption ─────────────────────────────────────────────────────
 
-    async fn consume_image(stream: &mut TlsStream<TcpStream>) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    async fn consume_image(
+        stream: &mut TlsStream<TcpStream>
+    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
         let _flags = stream.read_u8().await?;
         let length = read_varint_u32(stream).await?;
-        let _id    = stream.read_u64().await?;
+        let _id = stream.read_u64().await?;
 
         let mut rem = length as usize;
         let mut buf = vec![0u8; 65536];
@@ -767,13 +1443,16 @@ impl TlsJtpClient {
     // ── Download modes ────────────────────────────────────────────────────────
 
     /// §9.2: reads JTPD header + M count before images.
-    async fn download_per_image(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_per_image(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let mut total = 0u64;
-        let conns     = ids.len();
+        let conns = ids.len();
 
         for id in ids {
             let stream = self.connect().await?;
-            let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+            let mut w = BufWriter::with_capacity(64 * 1024, stream);
             write_get_request_buffered(&mut w, 0, &[*id]).await?;
             w.flush().await?;
 
@@ -783,23 +1462,28 @@ impl TlsJtpClient {
                 return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
             }
             let m = w.get_mut().read_u8().await? as usize;
-            for _ in 0..m { total += Self::consume_image(w.get_mut()).await?; }
+            for _ in 0..m {
+                total += Self::consume_image(w.get_mut()).await?;
+            }
         }
 
         Ok((total, conns))
     }
 
     /// §9.2: reads JTPD header + M count per chunk.
-    async fn download_batch(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_batch(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
         let mut total = 0u64;
         let mut conns = 1;
 
         for chunk in ids.chunks(255) {
             if chunk.as_ptr() != ids.as_ptr() {
                 let s = self.connect().await?;
-                w     = BufWriter::with_capacity(64 * 1024, s);
+                w = BufWriter::with_capacity(64 * 1024, s);
                 conns += 1;
             }
             write_get_request_buffered(&mut w, 0, chunk).await?;
@@ -811,16 +1495,21 @@ impl TlsJtpClient {
                 return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
             }
             let m = w.get_mut().read_u8().await? as usize;
-            for _ in 0..m { total += Self::consume_image(w.get_mut()).await?; }
+            for _ in 0..m {
+                total += Self::consume_image(w.get_mut()).await?;
+            }
         }
 
         Ok((total, conns))
     }
 
     /// §9.2: reads JTPD header + M count per keep-alive chunk.
-    async fn download_keepalive(&self, ids: &[ImageId]) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_keepalive(
+        &self,
+        ids: &[ImageId]
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
         let mut total = 0u64;
 
         for chunk in ids.chunks(255) {
@@ -833,63 +1522,78 @@ impl TlsJtpClient {
                 return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
             }
             let m = w.get_mut().read_u8().await? as usize;
-            for _ in 0..m { total += Self::consume_image(w.get_mut()).await?; }
+            for _ in 0..m {
+                total += Self::consume_image(w.get_mut()).await?;
+            }
         }
 
         Ok((total, 1))
     }
 
     /// §9.2: each worker reads JTPD header + M count per chunk.
-    async fn download_parallel(&self, ids: &[ImageId], num_workers: usize) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
-        let chunk_size  = (ids.len() + num_workers - 1) / num_workers;
-        let semaphore   = Arc::new(Semaphore::new(num_workers));
-        let addr        = self.addr.clone();
-        let connector   = self.connector.clone();
+    async fn download_parallel(
+        &self,
+        ids: &[ImageId],
+        num_workers: usize
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let chunk_size = (ids.len() + num_workers - 1) / num_workers;
+        let semaphore = Arc::new(Semaphore::new(num_workers));
+        let addr = self.addr.clone();
+        let connector = self.connector.clone();
         let server_name = self.server_name.clone();
         let mut handles = Vec::new();
 
         for chunk in ids.chunks(chunk_size) {
-            let chunk       = chunk.to_vec();
-            let sem         = Arc::clone(&semaphore);
-            let addr        = addr.clone();
-            let connector   = connector.clone();
+            let chunk = chunk.to_vec();
+            let sem = Arc::clone(&semaphore);
+            let addr = addr.clone();
+            let connector = connector.clone();
             let server_name = server_name.clone();
 
-            handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
-                let tcp     = TcpStream::connect(&addr).await?;
-                tcp.set_nodelay(true)?;
-                let tls     = connector.connect(server_name, tcp).await?;
-                let mut w   = BufWriter::with_capacity(64 * 1024, tls);
-                let mut bytes = 0u64;
+            handles.push(
+                tokio::spawn(async move {
+                    let _permit = sem.acquire().await.unwrap();
+                    let tcp = TcpStream::connect(&addr).await?;
+                    tcp.set_nodelay(true)?;
+                    let tls = connector.connect(server_name, tcp).await?;
+                    let mut w = BufWriter::with_capacity(64 * 1024, tls);
+                    let mut bytes = 0u64;
 
-                for sub in chunk.chunks(255) {
-                    write_get_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, sub).await?;
-                    w.flush().await?;
+                    for sub in chunk.chunks(255) {
+                        write_get_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, sub).await?;
+                        w.flush().await?;
 
-                    let mut hdr = [0u8; 4];
-                    w.get_mut().read_exact(&mut hdr).await?;
-                    if &hdr != RESPONSE_GET_BY_ID {
-                        return Err::<_, Box<dyn std::error::Error + Send + Sync>>(
-                            format!("unexpected GET_BY_ID header: {:?}", hdr).into()
-                        );
+                        let mut hdr = [0u8; 4];
+                        w.get_mut().read_exact(&mut hdr).await?;
+                        if &hdr != RESPONSE_GET_BY_ID {
+                            return Err::<_, Box<dyn std::error::Error + Send + Sync>>(
+                                format!("unexpected GET_BY_ID header: {:?}", hdr).into()
+                            );
+                        }
+                        let m = w.get_mut().read_u8().await? as usize;
+                        for _ in 0..m {
+                            bytes += TlsJtpClient::consume_image(w.get_mut()).await?;
+                        }
                     }
-                    let m = w.get_mut().read_u8().await? as usize;
-                    for _ in 0..m { bytes += TlsJtpClient::consume_image(w.get_mut()).await?; }
-                }
 
-                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
-            }));
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(bytes)
+                })
+            );
         }
 
         let mut total = 0u64;
-        for h in handles { total += h.await??; }
+        for h in handles {
+            total += h.await??;
+        }
         Ok((total, num_workers))
     }
 
-    async fn download_delta(&self, have_ids: &[ImageId]) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_delta(
+        &self,
+        have_ids: &[ImageId]
+    ) -> Result<(u64, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         write_batch_request_buffered(&mut w, 0, have_ids).await?;
         w.flush().await?;
@@ -902,13 +1606,17 @@ impl TlsJtpClient {
 
         let missing = read_varint_u32(w.get_mut()).await? as usize;
         let mut total = 0u64;
-        for _ in 0..missing { total += Self::consume_image(w.get_mut()).await?; }
+        for _ in 0..missing {
+            total += Self::consume_image(w.get_mut()).await?;
+        }
         Ok((total, 1, missing))
     }
 
-    async fn download_list_and_get(&self) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
+    async fn download_list_and_get(
+        &self
+    ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         write_list_and_get_request_buffered(&mut w, 0).await?;
         w.flush().await?;
@@ -921,21 +1629,25 @@ impl TlsJtpClient {
 
         let count = read_varint_u32(w.get_mut()).await? as usize;
         let mut total = 0u64;
-        for _ in 0..count { total += Self::consume_image(w.get_mut()).await?; }
+        for _ in 0..count {
+            total += Self::consume_image(w.get_mut()).await?;
+        }
         Ok((total, 1))
     }
 
     /// §8.5 CANCEL + §9.2 JTPD + §9.6 JTPC.
     async fn download_with_cancel(
         &self,
-        ids:          &[ImageId],
-        cancel_after: usize,
+        ids: &[ImageId],
+        cancel_after: usize
     ) -> Result<(u64, Duration, usize), Box<dyn std::error::Error + Send + Sync>> {
-        if ids.is_empty() { return Ok((0, Duration::ZERO, 0)); }
+        if ids.is_empty() {
+            return Ok((0, Duration::ZERO, 0));
+        }
 
-        let chunk  = &ids[..ids.len().min(255)];
+        let chunk = &ids[..ids.len().min(255)];
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         write_get_request_buffered(&mut w, REQUEST_FLAG_KEEP_ALIVE, chunk).await?;
         w.flush().await?;
@@ -946,7 +1658,7 @@ impl TlsJtpClient {
         if &hdr != RESPONSE_GET_BY_ID {
             return Err(format!("unexpected GET_BY_ID header: {:?}", hdr).into());
         }
-        let m        = w.get_mut().read_u8().await? as usize;
+        let m = w.get_mut().read_u8().await? as usize;
         let received = cancel_after.min(m);
 
         let mut bytes_before = 0u64;
@@ -964,8 +1676,15 @@ impl TlsJtpClient {
         let mut pos = 0;
         while pos < 4 {
             let b = w.get_mut().read_u8().await?;
-            if pos == 0 && b != RESPONSE_CANCEL[0] { continue; }
-            if b == RESPONSE_CANCEL[pos] { ack_buf[pos] = b; pos += 1; } else { pos = 0; }
+            if pos == 0 && b != RESPONSE_CANCEL[0] {
+                continue;
+            }
+            if b == RESPONSE_CANCEL[pos] {
+                ack_buf[pos] = b;
+                pos += 1;
+            } else {
+                pos = 0;
+            }
         }
 
         let cancel_rtt = cancel_start.elapsed();
@@ -979,10 +1698,10 @@ impl TlsJtpClient {
     /// §8.6 WATCH + §9.7 JTPW + §8.5 CANCEL to clean up.
     async fn watch_time_to_first_event(
         &self,
-        timeout: Duration,
+        timeout: Duration
     ) -> Result<Duration, Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.connect().await?;
-        let mut w  = BufWriter::with_capacity(64 * 1024, stream);
+        let mut w = BufWriter::with_capacity(64 * 1024, stream);
 
         write_watch_request_buffered(w.get_mut()).await?;
         w.flush().await?;
@@ -997,25 +1716,31 @@ impl TlsJtpClient {
                     format!("unexpected WATCH frame: {:?}", hdr).into()
                 );
             }
-            let _id      = w.get_mut().read_u64().await?;
-            let _flags   = w.get_mut().read_u8().await?;
+            let _id = w.get_mut().read_u64().await?;
+            let _flags = w.get_mut().read_u8().await?;
             let name_len = w.get_mut().read_u16().await? as usize;
             let mut name = vec![0u8; name_len];
             w.get_mut().read_exact(&mut name).await?;
-            let _size    = read_varint_u32(w.get_mut()).await?;
+            let _size = read_varint_u32(w.get_mut()).await?;
             Ok(())
-        })
-        .await;
+        }).await;
 
         let elapsed = start.elapsed();
 
         match result {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(format!(
-                "No WATCH event within {:?}. \
-                 Is the server running with --watch?", timeout
-            ).into()),
+            Ok(Err(e)) => {
+                return Err(e);
+            }
+            Err(_) => {
+                return Err(
+                    format!(
+                        "No WATCH event within {:?}. \
+                 Is the server running with --watch?",
+                        timeout
+                    ).into()
+                );
+            }
         }
 
         let _ = write_cancel_request_buffered(w.get_mut()).await;
@@ -1029,14 +1754,14 @@ impl TlsJtpClient {
 // ============================================================================
 
 async fn download_http(
-    client:    &reqwest::Client,
-    base_url:  &str,
-    filenames: &[String],
+    client: &reqwest::Client,
+    base_url: &str,
+    filenames: &[String]
 ) -> Result<(u64, usize), Box<dyn std::error::Error + Send + Sync>> {
     let mut total = 0u64;
     for filename in filenames {
-        let url   = format!("{}/image/{}", base_url, filename);
-        let resp  = client.get(&url).send().await?;
+        let url = format!("{}/image/{}", base_url, filename);
+        let resp = client.get(&url).send().await?;
         let bytes = resp.bytes().await?;
         total += bytes.len() as u64;
     }
@@ -1069,10 +1794,7 @@ fn print_info(msg: &str) {
 }
 
 fn print_run(run: usize, total: usize, duration_ms: f64) {
-    println!(
-        "  {} {}/{}... {} {:.2} ms",
-        "Run".yellow(), run, total, "OK".green(), duration_ms
-    );
+    println!("  {} {}/{}... {} {:.2} ms", "Run".yellow(), run, total, "OK".green(), duration_ms);
 }
 
 // ============================================================================
@@ -1081,33 +1803,67 @@ fn print_run(run: usize, total: usize, duration_ms: f64) {
 
 fn parse_args() -> BenchmarkConfig {
     let mut config = BenchmarkConfig::default();
-    let mut args   = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--jtp-addr"   => { if let Some(v) = args.next() { config.jtp_addr  = v; } }
-            "--http-addr"  => { if let Some(v) = args.next() { config.http_addr = v; } }
-            "--cert"       => { if let Some(v) = args.next() { config.cert_path = v; } }
-            "--images"     => {
-                if let Some(v) = args.next() { config.test_images_dir = PathBuf::from(v); }
+            "--jtp-addr" => {
+                if let Some(v) = args.next() {
+                    config.jtp_addr = v;
+                }
             }
-            "--warmup"     => {
-                if let Some(v) = args.next() { config.warmup_iterations = v.parse().unwrap_or(5); }
+            "--http-addr" => {
+                if let Some(v) = args.next() {
+                    config.http_addr = v;
+                }
+            }
+            "--cert" => {
+                if let Some(v) = args.next() {
+                    config.cert_path = v;
+                }
+            }
+            "--images" => {
+                if let Some(v) = args.next() {
+                    config.test_images_dir = PathBuf::from(v);
+                }
+            }
+            "--warmup" => {
+                if let Some(v) = args.next() {
+                    config.warmup_iterations = v.parse().unwrap_or(5);
+                }
             }
             "--iterations" | "-n" => {
-                if let Some(v) = args.next() { config.test_iterations = v.parse().unwrap_or(10); }
+                if let Some(v) = args.next() {
+                    config.test_iterations = v.parse().unwrap_or(10);
+                }
             }
             "--parallel" | "-p" => {
-                if let Some(v) = args.next() { config.parallel_workers = v.parse().unwrap_or(4); }
+                if let Some(v) = args.next() {
+                    config.parallel_workers = v.parse().unwrap_or(4);
+                }
             }
             "--cancel-after" => {
-                if let Some(v) = args.next() { config.cancel_after = v.parse().unwrap_or(1); }
+                if let Some(v) = args.next() {
+                    config.cancel_after = v.parse().unwrap_or(1);
+                }
             }
             "--watch-timeout" => {
-                if let Some(v) = args.next() { config.watch_timeout_ms = v.parse().unwrap_or(2000); }
+                if let Some(v) = args.next() {
+                    config.watch_timeout_ms = v.parse().unwrap_or(2000);
+                }
             }
-            "--tls" | "--secure"    => { config.no_tls = false; }
-            "--no-tls" | "--plain"  => { config.no_tls = true;  }
+            "--quic" => {
+                config.use_quic = true;
+            }
+            "--no-quic" => {
+                config.use_quic = false;
+            }
+            "--tls" | "--secure" => {
+                config.no_tls = false;
+            }
+            "--no-tls" | "--plain" => {
+                config.no_tls = true;
+            }
             "--http-tls" | "--https" => {
                 config.http_tls = true;
                 if config.http_addr == "http://127.0.0.1:8080" {
@@ -1117,41 +1873,43 @@ fn parse_args() -> BenchmarkConfig {
             "--mode" => {
                 if let Some(v) = args.next() {
                     config.modes = match v.as_str() {
-                        "http"                      => vec![BenchmarkMode::Http],
-                        "per-image"                 => vec![BenchmarkMode::JtpPerImage],
-                        "batch"                     => vec![BenchmarkMode::JtpBatch],
-                        "keepalive" | "ka"          => vec![BenchmarkMode::JtpKeepAlive],
-                        "parallel"                  => vec![BenchmarkMode::JtpParallel],
-                        "delta"                     => vec![BenchmarkMode::JtpDelta],
-                        "list-and-get" | "lag"      => vec![BenchmarkMode::JtpListAndGet],
-                        "cancel"                    => vec![BenchmarkMode::JtpCancel],
-                        "watch"                     => vec![BenchmarkMode::JtpWatch],
-                        "jtp" => vec![
-                            BenchmarkMode::JtpPerImage,
-                            BenchmarkMode::JtpBatch,
-                            BenchmarkMode::JtpKeepAlive,
-                            BenchmarkMode::JtpParallel,
-                            BenchmarkMode::JtpListAndGet,
-                            BenchmarkMode::JtpCancel,
-                        ],
-                        "all" => vec![
-                            BenchmarkMode::Http,
-                            BenchmarkMode::JtpPerImage,
-                            BenchmarkMode::JtpBatch,
-                            BenchmarkMode::JtpKeepAlive,
-                            BenchmarkMode::JtpParallel,
-                            BenchmarkMode::JtpDelta,
-                            BenchmarkMode::JtpListAndGet,
-                            BenchmarkMode::JtpCancel,
-                            BenchmarkMode::JtpWatch,
-                        ],
+                        "http" => vec![BenchmarkMode::Http],
+                        "per-image" => vec![BenchmarkMode::JtpPerImage],
+                        "batch" => vec![BenchmarkMode::JtpBatch],
+                        "keepalive" | "ka" => vec![BenchmarkMode::JtpKeepAlive],
+                        "parallel" => vec![BenchmarkMode::JtpParallel],
+                        "delta" => vec![BenchmarkMode::JtpDelta],
+                        "list-and-get" | "lag" => vec![BenchmarkMode::JtpListAndGet],
+                        "cancel" => vec![BenchmarkMode::JtpCancel],
+                        "watch" => vec![BenchmarkMode::JtpWatch],
+                        "jtp" =>
+                            vec![
+                                BenchmarkMode::JtpPerImage,
+                                BenchmarkMode::JtpBatch,
+                                BenchmarkMode::JtpKeepAlive,
+                                BenchmarkMode::JtpParallel,
+                                BenchmarkMode::JtpListAndGet,
+                                BenchmarkMode::JtpCancel
+                            ],
+                        "all" =>
+                            vec![
+                                BenchmarkMode::Http,
+                                BenchmarkMode::JtpPerImage,
+                                BenchmarkMode::JtpBatch,
+                                BenchmarkMode::JtpKeepAlive,
+                                BenchmarkMode::JtpParallel,
+                                BenchmarkMode::JtpDelta,
+                                BenchmarkMode::JtpListAndGet,
+                                BenchmarkMode::JtpCancel,
+                                BenchmarkMode::JtpWatch
+                            ],
                         _ => config.modes,
                     };
                 }
             }
             "-h" | "--help" => {
                 eprintln!(
-                    "JTP vs HTTP Performance Benchmark (draft-baker-jtp-01)\n\n\
+                    "JTP vs HTTP Performance Benchmark \n\n\
 Usage: benchmark [OPTIONS]\n\n\
 Options:\n  \
   --jtp-addr ADDR       JTP server address (default: 127.0.0.1:8443)\n  \
@@ -1201,13 +1959,21 @@ Prerequisites:\n  \
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = parse_args();
 
-    print_header("JTP vs HTTP Image Download Benchmark (draft-baker-jtp-01)");
+    print_header("JTP vs HTTP Image Download Benchmark");
 
     println!();
     print_info(&format!("Test images directory: {:?}", config.test_images_dir));
     print_info(&format!("HTTP server:  {}", config.http_addr));
     print_info(&format!("JTP server:   {}", config.jtp_addr));
-    print_info(&format!("Modes:        {:?}", config.modes.iter().map(|m| m.short_name()).collect::<Vec<_>>()));
+    print_info(
+        &format!(
+            "Modes:        {:?}",
+            config.modes
+                .iter()
+                .map(|m| m.short_name())
+                .collect::<Vec<_>>()
+        )
+    );
     print_info(&format!("Warmup runs:  {}", config.warmup_iterations));
     print_info(&format!("Bench runs:   {}", config.test_iterations));
     print_info(&format!("Parallel workers: {}", config.parallel_workers));
@@ -1215,13 +1981,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     print_info(&format!("Watch timeout: {} ms", config.watch_timeout_ms));
 
     // Collect image filenames from disk.
-    let image_files: Vec<String> = std::fs::read_dir(&config.test_images_dir)?
+    let image_files: Vec<String> = std::fs
+        ::read_dir(&config.test_images_dir)?
         .filter_map(|e| e.ok())
         .filter(|e| {
             let path = e.path();
             if let Some(ext) = path.extension() {
-                matches!(ext.to_string_lossy().to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp")
-            } else { false }
+                matches!(
+                    ext.to_string_lossy().to_lowercase().as_str(),
+                    "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+                )
+            } else {
+                false
+            }
         })
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
@@ -1231,12 +2003,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
 
-    let total_size: u64 = image_files.iter()
-        .filter_map(|f| std::fs::metadata(config.test_images_dir.join(f)).ok().map(|m| m.len()))
+    let total_size: u64 = image_files
+        .iter()
+        .filter_map(|f|
+            std::fs
+                ::metadata(config.test_images_dir.join(f))
+                .ok()
+                .map(|m| m.len())
+        )
         .sum();
 
     println!();
-    print_info(&format!("Found {} test images ({:.2} KB total):", image_files.len(), (total_size as f64) / 1024.0));
+    print_info(
+        &format!(
+            "Found {} test images ({:.2} KB total):",
+            image_files.len(),
+            (total_size as f64) / 1024.0
+        )
+    );
     for img in &image_files {
         if let Ok(meta) = std::fs::metadata(config.test_images_dir.join(img)) {
             println!("    - {} ({:.2} KB)", img, (meta.len() as f64) / 1024.0);
@@ -1244,13 +2028,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let has_http_mode = config.modes.contains(&BenchmarkMode::Http);
-    let has_jtp_mode  = config.modes.iter().any(|m| *m != BenchmarkMode::Http);
+    let has_jtp_mode = config.modes.iter().any(|m| *m != BenchmarkMode::Http);
     let has_watch_mode = config.modes.contains(&BenchmarkMode::JtpWatch);
 
     // HTTP client (accepts self-signed certs for HTTPS auto-detection).
-    let http_client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()?;
+    let http_client = reqwest::Client::builder().danger_accept_invalid_certs(true).build()?;
 
     // Auto-detect HTTP server if needed.
     let mut http_addr = config.http_addr.clone();
@@ -1276,7 +2058,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         if !found {
             eprintln!("{} No HTTP server found. Tried:", "Error:".red().bold());
-            for addr in &try_addrs { eprintln!("    - {}", addr); }
+            for addr in &try_addrs {
+                eprintln!("    - {}", addr);
+            }
             eprintln!();
             eprintln!("  Start HTTP:  node examples/benchmark/http/server.js");
             eprintln!("  Start HTTPS: node examples/benchmark/http/server-https.js");
@@ -1288,7 +2072,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!();
     print_info("Checking JTP server...");
     let jtp_client: Option<JtpClientWrapper> = if has_jtp_mode {
-        match JtpClientWrapper::auto_detect(&config.jtp_addr, &config.cert_path).await {
+        match
+            JtpClientWrapper::auto_detect(
+                &config.jtp_addr,
+                &config.cert_path,
+                config.use_quic
+            ).await
+        {
             Ok((client, is_tls)) => {
                 match client.list_images().await {
                     Ok(images) => {
@@ -1306,10 +2096,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
             Err(e) => {
-                eprintln!("{} Cannot connect to JTP server at {}: {}", "Error:".red().bold(), config.jtp_addr, e);
+                eprintln!(
+                    "{} Cannot connect to JTP server at {}: {}",
+                    "Error:".red().bold(),
+                    config.jtp_addr,
+                    e
+                );
                 eprintln!();
-                eprintln!("  Start with TLS:  cargo run --release --bin server -- --images images/");
-                eprintln!("  Start plain TCP: cargo run --release --bin server -- --no-tls --images images/");
+                eprintln!(
+                    "  Start with TLS:  cargo run --release --bin server -- --images images/"
+                );
+                eprintln!(
+                    "  Start plain TCP: cargo run --release --bin server -- --no-tls --images images/"
+                );
                 return Ok(());
             }
         }
@@ -1323,12 +2122,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         vec![]
     };
-    let jtp_ids: Vec<ImageId> = jtp_images.iter().map(|i| i.id).collect();
+    let jtp_ids: Vec<ImageId> = jtp_images
+        .iter()
+        .map(|i| i.id)
+        .collect();
 
     // Delta: simulate having the first half already.
-    let have_ids:      Vec<ImageId>         = jtp_ids.iter().take(jtp_ids.len() / 2).copied().collect();
-    let have_set:      HashSet<ImageId>     = have_ids.iter().copied().collect();
-    let missing_count: usize                = jtp_ids.iter().filter(|id| !have_set.contains(id)).count();
+    let have_ids: Vec<ImageId> = jtp_ids
+        .iter()
+        .take(jtp_ids.len() / 2)
+        .copied()
+        .collect();
+    let have_set: HashSet<ImageId> = have_ids.iter().copied().collect();
+    let missing_count: usize = jtp_ids
+        .iter()
+        .filter(|id| !have_set.contains(id))
+        .count();
 
     let watch_timeout = Duration::from_millis(config.watch_timeout_ms);
     let mut results: Vec<BenchmarkResult> = Vec::new();
@@ -1346,13 +2155,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let _ = download_http(&http_client, &http_addr, &image_files).await;
                 }
                 BenchmarkMode::JtpPerImage => {
-                    if let Some(ref c) = jtp_client { let _ = c.download_per_image(&jtp_ids).await; }
+                    if let Some(ref c) = jtp_client {
+                        let _ = c.download_per_image(&jtp_ids).await;
+                    }
                 }
                 BenchmarkMode::JtpBatch => {
-                    if let Some(ref c) = jtp_client { let _ = c.download_batch(&jtp_ids).await; }
+                    if let Some(ref c) = jtp_client {
+                        let _ = c.download_batch(&jtp_ids).await;
+                    }
                 }
                 BenchmarkMode::JtpKeepAlive => {
-                    if let Some(ref c) = jtp_client { let _ = c.download_keepalive(&jtp_ids).await; }
+                    if let Some(ref c) = jtp_client {
+                        let _ = c.download_keepalive(&jtp_ids).await;
+                    }
                 }
                 BenchmarkMode::JtpParallel => {
                     if let Some(ref c) = jtp_client {
@@ -1360,10 +2175,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 }
                 BenchmarkMode::JtpDelta => {
-                    if let Some(ref c) = jtp_client { let _ = c.download_delta(&have_ids).await; }
+                    if let Some(ref c) = jtp_client {
+                        let _ = c.download_delta(&have_ids).await;
+                    }
                 }
                 BenchmarkMode::JtpListAndGet => {
-                    if let Some(ref c) = jtp_client { let _ = c.download_list_and_get().await; }
+                    if let Some(ref c) = jtp_client {
+                        let _ = c.download_list_and_get().await;
+                    }
                 }
                 // Cancel and Watch have side-effects; skip warmup to avoid
                 // disrupting server state.
@@ -1372,9 +2191,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         print_success("Warmup complete");
 
-        let mut durations      = Vec::with_capacity(config.test_iterations);
-        let mut total_bytes    = 0u64;
-        let mut total_conns    = 0usize;
+        let mut durations = Vec::with_capacity(config.test_iterations);
+        let mut total_bytes = 0u64;
+        let mut total_conns = 0usize;
         let mut mode_note: Option<String> = None;
 
         for run in 1..=config.test_iterations {
@@ -1385,27 +2204,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     download_http(&http_client, &http_addr, &image_files).await?
                 }
                 BenchmarkMode::JtpPerImage => {
-                    if let Some(ref c) = jtp_client { c.download_per_image(&jtp_ids).await? } else { (0, 0) }
+                    if let Some(ref c) = jtp_client {
+                        c.download_per_image(&jtp_ids).await?
+                    } else {
+                        (0, 0)
+                    }
                 }
                 BenchmarkMode::JtpBatch => {
-                    if let Some(ref c) = jtp_client { c.download_batch(&jtp_ids).await? } else { (0, 0) }
+                    if let Some(ref c) = jtp_client {
+                        c.download_batch(&jtp_ids).await?
+                    } else {
+                        (0, 0)
+                    }
                 }
                 BenchmarkMode::JtpKeepAlive => {
-                    if let Some(ref c) = jtp_client { c.download_keepalive(&jtp_ids).await? } else { (0, 0) }
+                    if let Some(ref c) = jtp_client {
+                        c.download_keepalive(&jtp_ids).await?
+                    } else {
+                        (0, 0)
+                    }
                 }
                 BenchmarkMode::JtpParallel => {
                     if let Some(ref c) = jtp_client {
                         c.download_parallel(&jtp_ids, config.parallel_workers).await?
-                    } else { (0, 0) }
+                    } else {
+                        (0, 0)
+                    }
                 }
                 BenchmarkMode::JtpDelta => {
                     if let Some(ref c) = jtp_client {
                         let (b, conn, _) = c.download_delta(&have_ids).await?;
                         (b, conn)
-                    } else { (0, 0) }
+                    } else {
+                        (0, 0)
+                    }
                 }
                 BenchmarkMode::JtpListAndGet => {
-                    if let Some(ref c) = jtp_client { c.download_list_and_get().await? } else { (0, 0) }
+                    if let Some(ref c) = jtp_client {
+                        c.download_list_and_get().await?
+                    } else {
+                        (0, 0)
+                    }
                 }
 
                 // JtpCancel: measures cancel RTT, not full transfer time.
@@ -1413,15 +2252,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 // partial transfer; the note records the CANCEL RTT separately.
                 BenchmarkMode::JtpCancel => {
                     if let Some(ref c) = jtp_client {
-                        let (b, cancel_rtt, received) =
-                            c.download_with_cancel(&jtp_ids, config.cancel_after).await?;
-                        mode_note = Some(format!(
-                            "Received {} packet(s) then cancelled (CANCEL RTT: {:.2} ms)",
-                            received,
-                            cancel_rtt.as_secs_f64() * 1000.0,
-                        ));
+                        let (b, cancel_rtt, received) = c.download_with_cancel(
+                            &jtp_ids,
+                            config.cancel_after
+                        ).await?;
+                        mode_note = Some(
+                            format!(
+                                "Received {} packet(s) then cancelled (CANCEL RTT: {:.2} ms)",
+                                received,
+                                cancel_rtt.as_secs_f64() * 1000.0
+                            )
+                        );
                         (b, 1)
-                    } else { (0, 0) }
+                    } else {
+                        (0, 0)
+                    }
                 }
 
                 // JtpWatch: measures time-to-first-event; uses durations as
@@ -1432,36 +2277,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         let elapsed = start.elapsed();
                         durations.push(elapsed);
                         print_run(run, config.test_iterations, ttfe.as_secs_f64() * 1000.0);
-                        mode_note = Some(format!(
-                            "Time-to-first-event: {:.2} ms",
-                            ttfe.as_secs_f64() * 1000.0,
-                        ));
+                        mode_note = Some(
+                            format!("Time-to-first-event: {:.2} ms", ttfe.as_secs_f64() * 1000.0)
+                        );
                         continue; // skip the generic push below
-                    } else { (0, 0) }
+                    } else {
+                        (0, 0)
+                    }
                 }
             };
 
-            let elapsed   = start.elapsed();
-            total_bytes   = bytes;
-            total_conns   = conns;
+            let elapsed = start.elapsed();
+            total_bytes = bytes;
+            total_conns = conns;
             durations.push(elapsed);
             print_run(run, config.test_iterations, elapsed.as_secs_f64() * 1000.0);
         }
 
         // Mode-specific info lines
         if *mode == BenchmarkMode::JtpDelta {
-            print_info(&format!(
-                "Delta sync: had {} images, server had {} missing",
-                have_ids.len(), missing_count,
-            ));
+            print_info(
+                &format!(
+                    "Delta sync: had {} images, server had {} missing",
+                    have_ids.len(),
+                    missing_count
+                )
+            );
         }
 
         results.push(BenchmarkResult {
-            mode:             *mode,
+            mode: *mode,
             durations,
             total_bytes,
             connections_made: total_conns,
-            note:             mode_note,
+            note: mode_note,
         });
     }
 
@@ -1491,7 +2340,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Comparison table — exclude Watch (incomparable units).
-    let comparable: Vec<&BenchmarkResult> = results.iter()
+    let comparable: Vec<&BenchmarkResult> = results
+        .iter()
         .filter(|r| r.mode != BenchmarkMode::JtpWatch)
         .collect();
 
@@ -1501,22 +2351,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!();
         println!(
             "  {:12} | {:>10} | {:>8} | {:>9} | {:>9} | {:>10} | {:>5}",
-            "Mode", "Avg Time", "Median", "Min", "Max", "Throughput", "Conns"
+            "Mode",
+            "Avg Time",
+            "Median",
+            "Min",
+            "Max",
+            "Throughput",
+            "Conns"
         );
         println!("  {}", "-".repeat(75));
 
-        let fastest = comparable.iter()
+        let fastest = comparable
+            .iter()
             .min_by(|a, b| a.stats().mean.partial_cmp(&b.stats().mean).unwrap())
             .map(|r| r.mode);
 
         for result in &comparable {
-            let stats    = result.stats();
-            let is_best  = Some(result.mode) == fastest;
-            let marker   = if is_best { " <-" } else { "" };
+            let stats = result.stats();
+            let is_best = Some(result.mode) == fastest;
+            let marker = if is_best { " <-" } else { "" };
             println!(
                 "  {:12} | {:>7.2} ms | {:>5.2} ms | {:>6.2} ms | {:>6.2} ms | {:>7.0} KB/s | {:>5}{}",
                 result.mode.short_name(),
-                stats.mean, stats.median, stats.min, stats.max,
+                stats.mean,
+                stats.median,
+                stats.min,
+                stats.max,
                 result.throughput_kbps(),
                 result.connections_made,
                 marker.green().bold()
@@ -1524,18 +2384,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
 
         print_subheader("Relative performance:");
-        if let Some(fastest_result) = comparable.iter()
-            .min_by(|a, b| a.stats().mean.partial_cmp(&b.stats().mean).unwrap())
+        if
+            let Some(fastest_result) = comparable
+                .iter()
+                .min_by(|a, b| a.stats().mean.partial_cmp(&b.stats().mean).unwrap())
         {
             let base = fastest_result.stats().mean;
             for result in &comparable {
                 let stats = result.stats();
                 if result.mode == fastest_result.mode {
-                    println!("  {}: {} (fastest)", result.mode.short_name().bright_green().bold(), "baseline".green());
+                    println!(
+                        "  {}: {} (fastest)",
+                        result.mode.short_name().bright_green().bold(),
+                        "baseline".green()
+                    );
                 } else {
-                    let ratio      = stats.mean / base;
+                    let ratio = stats.mean / base;
                     let slower_pct = (ratio - 1.0) * 100.0;
-                    println!("  {}: {:.2}x slower ({:.1}% slower)", result.mode.short_name().yellow(), ratio, slower_pct);
+                    println!(
+                        "  {}: {:.2}x slower ({:.1}% slower)",
+                        result.mode.short_name().yellow(),
+                        ratio,
+                        slower_pct
+                    );
                 }
             }
         }
@@ -1545,7 +2416,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // WATCH summary (separate section, different unit).
-    let watch_results: Vec<&BenchmarkResult> = results.iter()
+    let watch_results: Vec<&BenchmarkResult> = results
+        .iter()
         .filter(|r| r.mode == BenchmarkMode::JtpWatch)
         .collect();
 
