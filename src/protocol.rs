@@ -66,6 +66,12 @@ impl ErrorCode {
     }
 }
 
+macro_rules! vlog {
+    ($enabled:expr, $($arg:tt)*) => {
+        if $enabled { eprintln!($($arg)*); }
+    };
+}
+
 // ── WatchEvent ────────────────────────────────────────────────────────────────
 // Broadcast payload for WATCH subscriptions (RFC §9.7).
 #[derive(Debug, Clone)]
@@ -177,6 +183,10 @@ pub struct ImageCatalog {
 }
 
 impl ImageCatalog {
+    pub fn new_empty() -> Self {
+        Self { images: HashMap::new(), cached_sorted: Arc::new(Vec::new()) }
+    }
+
     pub fn new() -> Self {
         Self::from_dir("images", None)
     }
@@ -248,7 +258,13 @@ impl ImageCatalog {
     }
 
     /// Add a single new image and rebuild the sorted index.
-    pub fn add_image(&mut self, meta: ImageMetadata) {
+    pub fn add_image(&mut self, meta: ImageMetadata, verbose: bool) {
+        // Reject collisions: silently skip if this ID already exists.
+        if self.images.contains_key(&meta.id) {
+            vlog!(verbose, "Collision on add_image for ID {:016x} ({}), skipping",
+                meta.id, meta.file_name.display());
+            return;
+        }
         self.images.insert(meta.id, meta);
         self.rebuild_sorted();
     }

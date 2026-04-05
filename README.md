@@ -1,8 +1,9 @@
 # Jason Transfer Protocol (JTP)
 
 > [!NOTE]
-> JTP has been submitted as an Internet-Draft to the IETF. As such, it is a work in progress and subject to change based on ongoing discussion and review within the IETF community.
-
+> JTP has been submitted as an Internet-Draft to the IETF. As such, it is a work
+> in progress and subject to change based on ongoing discussion and review
+> within the IETF community.
 
 **JTP** is a high-performance binary protocol for transferring images over TCP
 with optional TLS encryption and intelligent compression.
@@ -15,6 +16,8 @@ with optional TLS encryption and intelligent compression.
 - **Compression**: Adaptive Zstd compression for compressible formats
 - **Connection reuse**: Keep-alive support to avoid repeated TLS handshakes
 - **Delta sync**: BATCH mode downloads only missing images
+
+A wider list of applications can be found [here](#applications).
 
 ## Getting Started
 
@@ -115,9 +118,56 @@ JTP uses Zstd compression with adaptive levels based on file size. Only
 compressible formats (BMP, unknown) are compressed. Already-compressed formats
 (PNG, JPEG, WebP, GIF) are sent as-is.
 
+## Testing
+
+Testing is handled through integration
+([tests/integration.rs](/tests/integration.rs)), to run against the tests (if
+changing or altering the rust implementation) you can use the following:
+
+```bash
+cargo test --test integration
+```
+
+OR for a more verbose output per test:
+
+```bash
+cargo test --test integration -- --nocapture
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Applications
+
+While it may not be clear what the big pros and use cases are for this protocol
+right away, the main ones are as follows:
+
+- Fast image distribution over a network: a server hosts an image catalog and
+  clients fetch images by ID.
+- Client/server sync of image sets: clients can list available images, then
+  download only what they need.
+- Delta synchronization: BATCH mode is for updating a client that already has
+  some images, so it only transfers missing ones.
+- Efficient repeated transfers: keep-alive and optional TLS make it practical
+  for many requests over one connection.
+
+More specific applications could include:
+
+- Photo library sync tools: keeping image folders in sync between a desktop and
+  a server.
+- Image CDN/origin backends: a server can expose a catalog of assets and let
+  edge nodes fetch by content ID.
+- Backup/replication for image archives: moving large sets of media files
+  efficiently with delta sync.
+- Desktop/mobile gallery sync: apps that need to download only missing photos
+  from a remote library.
+- Machine-learning dataset distribution: shipping large image datasets to
+  training nodes.
+- Asset delivery for static sites or apps: pushing image bundles to deployment
+  targets.
+- On-prem media management systems: catalogs of screenshots, scans, or design
+  assets.
 
 ## License
 
